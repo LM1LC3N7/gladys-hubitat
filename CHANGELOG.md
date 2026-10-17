@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
 ### Added
 
 - The devices authorized in the Maker API of a Hubitat Elevation hub, offered
@@ -41,4 +43,5 @@ the notes of the version's GitHub Release.
 - Transport badges (hub unreachable, device offline, live events lost), a
   "Test the connection" button, English and French texts.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-hubitat/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-hubitat/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-hubitat/releases/tag/v0.1.1

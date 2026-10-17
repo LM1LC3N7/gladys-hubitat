@@ -1,6 +1,6 @@
 {
   "name": "gladys-hubitat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Hubitat Elevation hubs, through the local Maker API and the hub event socket. Unofficial, not affiliated with Hubitat.",
   "type": "module",
