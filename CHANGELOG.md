@@ -29,11 +29,15 @@ the notes of the version's GitHub Release.
   garage door command is a shutter-like control, never a switch. The switch
   of a lock, door, valve, siren or keypad stays read-only. No HSM or mode
   command.
-- Temperatures in °C, converted from a Fahrenheit hub; setpoints only once the
-  hub's scale is confirmed and the current value plausible.
-- A watchdog that opens the event socket again when it misses a change or
-  stays silent for 30 minutes; reads merged with the events received meanwhile.
-- Energy index protected against a single drop; Wh converted to kWh.
+- Temperatures in °C, converted from a Fahrenheit hub; setpoints refused when
+  the hub's units contradict the option or the current setpoint is unknown or
+  implausible in its scale (°C up to 35, °F from 39), with or without live
+  events.
+- A watchdog that opens the event socket again at once when it misses a
+  change or stays silent for 30 minutes; reads merged with the events
+  received meanwhile.
+- Energy index protected against drops (taken only when the index rises again
+  above the low value); Wh converted to kWh.
 - Transport badges (hub unreachable, device offline, live events lost), a
   "Test the connection" button, English and French texts.
 

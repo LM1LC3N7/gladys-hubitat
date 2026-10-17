@@ -495,17 +495,23 @@ export class HubitatApp {
   }
 
   /**
-   * An energy index only goes up: a single drop is held (a glitch of the
-   * driver), a second one in a row is taken (the meter was reset).
+   * An energy index only goes up. A lower reading is held (a glitch of the
+   * driver); the drop is taken only when a later reading is strictly above the
+   * low value held (the meter was reset and counts again). The same low value
+   * read again stays held: no false consumption when the index comes back.
    */
   meterOk(featureId, { state }) {
     const last = this.meters.get(featureId);
-    if (last && state < last.value && !last.dropped) {
-      last.dropped = true;
-      this.warnOnce(`drop:${featureId}`, `${featureId}: energy index went down, held once`);
+    if (last && state < last.value) {
+      if (last.low !== undefined && state > last.low) {
+        this.meters.set(featureId, { value: state });
+        return true;
+      }
+      last.low = state;
+      this.warnOnce(`drop:${featureId}`, `${featureId}: energy index went down, held`);
       return false;
     }
-    this.meters.set(featureId, { value: state, dropped: false });
+    this.meters.set(featureId, { value: state });
     return true;
   }
 
@@ -525,7 +531,10 @@ export class HubitatApp {
       return;
     }
     this.liveOpening = generation;
-    this.liveState = this.liveState === 'down' ? 'down' : 'connecting';
+    // A reopening by the watchdog keeps 'live' (no degraded badge) until it fails.
+    if (this.liveState !== 'down' && this.liveState !== 'live') {
+      this.liveState = 'connecting';
+    }
     this.openLive({
       url: this.config.url,
       WebSocket: this.WebSocket,
@@ -576,13 +585,18 @@ export class HubitatApp {
       .catch((err) => this.liveFailed(generation, err));
   }
 
-  /** The watchdog: the socket seems deaf, open it again. */
+  /**
+   * The watchdog: the socket seems deaf, open it again at once. The state
+   * stays 'live' (no "down", no degraded badge) unless the reopening fails.
+   */
   liveLost(generation, reason) {
     this.logger.warn(`Hubitat live events: ${reason}, opening the event socket again`);
     const session = this.live;
     this.live = null;
     session?.close();
-    this.background(this.liveFailed(generation, new LiveError('closed', reason)));
+    // No watchdog comparison until the new socket is open.
+    this.liveSince = Infinity;
+    this.startLive(generation);
   }
 
   async liveFailed(generation, err) {
@@ -1035,7 +1049,9 @@ export class HubitatApp {
       if (!this.client || !this.online) {
         throw this.denied('notConnected');
       }
-      if (writer.safety) {
+      // Stopping a moving garage door stays possible while it is guarded.
+      const stop = writer.safety === 'garage' && Number(value) === 0;
+      if (writer.safety && !stop) {
         this.checkNotGuarded(id);
       }
       await this.serialized(id, async () => {
@@ -1050,7 +1066,9 @@ export class HubitatApp {
         let plan;
         try {
           if (writer.safety) {
-            this.checkNotGuarded(id);
+            if (!stop) {
+              this.checkNotGuarded(id);
+            }
             plan = await this.freshPlan(id, writer, value, options);
           } else {
             const record = this.records.get(id);
@@ -1066,16 +1084,24 @@ export class HubitatApp {
           }
           throw err;
         }
-        let sent = false;
+        // Requests that may have reached the device (a "too late" refusal never left).
+        let sent = 0;
         try {
           for (const call of plan.calls) {
             // The option is checked once more just before the request leaves.
             this.checkAllowed(writer);
-            sent = true;
-            await client.command(id, call.command, call.args, options.send);
+            try {
+              await client.command(id, call.command, call.args, options.send);
+              sent += 1;
+            } catch (err) {
+              if (err?.refusal !== 'tooLate') {
+                sent += 1;
+              }
+              throw err;
+            }
           }
         } finally {
-          if (sent) {
+          if (sent > 0) {
             if (writer.safety && plan.expected !== undefined) {
               // Set after the request, sent or failed (it may have reached the device).
               this.setGuard(id, writer.safety, plan.expected, plan.start);
@@ -1102,20 +1128,23 @@ export class HubitatApp {
   }
 
   /**
-   * A setpoint is sent only when the scale of the hub is confirmed (the unit
-   * of the attribute, or of the hub's events, agreeing with the option) and
-   * the current value is plausible in it.
+   * A setpoint is sent in the scale of the attribute's unit, else the one the
+   * hub's events gave, else the option; refused when the hub's events
+   * contradict the option, or when the current setpoint is unknown or outside
+   * the band of that scale (disjoint bands: °C only up to 35, °F only from
+   * 39), so a °F hub configured in °C (or the reverse) is caught even without
+   * live events.
    */
   checkScale(record, attr) {
-    const unitScale = scaleOf(record?.attributes.get(attr)?.unit, undefined);
-    const scale =
-      unitScale ??
-      (this.hubScale === this.config.temperatureScale ? this.config.temperatureScale : undefined);
-    if (!scale) {
+    if (this.hubScale && this.hubScale !== this.config.temperatureScale) {
       throw this.denied('scaleUnknown');
     }
+    const scale =
+      scaleOf(record?.attributes.get(attr)?.unit, undefined) ??
+      this.hubScale ??
+      this.config.temperatureScale;
     const current = numberAttr(record, attr);
-    if (current !== undefined && (scale === 'C' ? current > 45 : current < 40)) {
+    if (current === undefined || (scale === 'C' ? current > 35 : current < 39)) {
       this.warnOnce(
         `implausible:${record.id}`,
         `Device ${record.id}: ${attr} ${current} in °${scale}?`,

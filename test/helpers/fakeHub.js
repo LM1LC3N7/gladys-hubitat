@@ -35,6 +35,9 @@ export function effect(attributes, command, args) {
     }
     case 'setColorTemperature':
       return { colorTemperature: Number(arg), colorMode: 'CT', switch: 'on' };
+    case 'stop':
+      // A garage door stopped half way: its driver reports nothing more here.
+      return {};
     case 'open':
       return 'door' in attributes ? { door: 'open' } : { windowShade: 'open', position: 100 };
     case 'close':
@@ -176,6 +179,7 @@ export function fakeHub({ token = TOKEN } = {}) {
       command(id, command, args = [], options) {
         return call('command', { id, command, args, options }, () => {
           signed();
+          box.onCommand?.(id, command);
           options?.guard?.();
           const device = box.device(id);
           const changes = device && effect(device.attributes, command, args);

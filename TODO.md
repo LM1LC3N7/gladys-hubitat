@@ -110,7 +110,10 @@ up to date at the end of every milestone.
   "state not confirmed" badge); never by an unknown state. Read backs at 5 and
   15 s (garage: 30 and 60 s too); a failed one sets the "state not confirmed"
   badge, a successful read clears it. The fake hub reports locks and doors
-  1 to 5 s late (tests S1 [unlock, lock], S2 [open, close]).
+  1 to 5 s late (tests S1 [unlock, lock], S2 [open, close]). Approval: a
+  garage door STOP (value 0) skips the guard check, so a moving door can be
+  stopped (R2); a command refused as "too late" at the socket never left, so
+  it sets no guard (R3).
 - **Sensitive switches** (review B1): a device with Lock, GarageDoorControl,
   DoorControl, Valve, Alarm or SecurityKeypad never gets a writable switch.
 - **No HSM nor mode command**: the client has no path for them, and a test
@@ -123,20 +126,23 @@ up to date at the end of every milestone.
   the units seen in events (I3).
 - **Temperature scale** (review I3): a temperature event's unit gives the hub
   scale; a disagreement with the option is logged once and told in the
-  connection status. A setpoint is refused unless the scale is confirmed (unit
-  of the attribute, or hub scale seen = option) and the current setpoint is
-  plausible (≤ 45 in °C, ≥ 40 in °F). Without live events, no unit is ever
-  seen: setpoints are refused (documented).
+  connection status. Setpoints (approval R1): scale = the attribute's unit,
+  else the hub scale seen, else the option; refused when the hub scale seen
+  contradicts the option, or when the current setpoint is unknown or outside
+  the band of its scale (disjoint bands: °C only ≤ 35, °F only ≥ 39), which
+  also catches a °F hub configured in °C without live events (tests S4b,
+  S4c).
 - **Socket watchdog** (review I4): when a full read (started after the socket
   opened, compared with a baseline also read after) finds a two-state
   attribute changed without an event, or no message came for 30 minutes, the
-  socket is closed and opened again (degraded badge meanwhile). A refused
+  socket is closed and opened again at once, staying "live" with plain badges
+  unless the reopening fails (then "down", degraded badges) (R6). A refused
   socket is logged for its first 3 failures, then once in 10 (M7).
 - **Reconnection to Gladys** (wave 3 lesson): `connected` calls `resume()`,
   which keeps the client, a 429 pause and a refused token's wait when the
   configuration is the same, and only publishes again. A 429 pause outlives a
   restart, covers the Scan button and the test button (M4).
-- **Commands**: their own HTTP agent (reads never hold them up); the deadline
+- **Commands**: their own HTTP agent, 4 sockets (reads never hold them up); the deadline
   guard runs again when the request really leaves (socket connected); the
   option is checked again just before each request (M5, M6).
 - **Command deadline**: set_value is acked within 5 s, so a command not sent
@@ -167,8 +173,10 @@ up to date at the end of every milestone.
   state" trigger of Gladys; dedicated `scene_triggers` are left for later.
 - **Energy**: `energy` (kWh) is a cumulative meter: `switch/energy` on a plug,
   `energy-sensor/index` on a meter alone, never a daily value. A unit `Wh`
-  is converted to kWh; a single drop of the index is held once, a second drop
-  in a row is taken as a reset (review M3).
+  is converted to kWh. A lower reading is held; the drop is taken only when a
+  later reading is strictly above the low value held (a reset that counts
+  again); the same low value read again stays held (review M3, approval R4,
+  test S9b [312.4, 0, 0, 312.5]).
 - **UV index**: `uv-sensor/integer`, rounded (review I5).
 - **Rates**: states through `publishChangedStates` (30-min heartbeat) within
   250 states a minute, measurements spaced by `sensor_interval` (10 s).

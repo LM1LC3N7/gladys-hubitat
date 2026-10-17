@@ -575,13 +575,39 @@ test('a read keeps the values of the events that came during it, and the units s
   );
 });
 
-test('temperature scale: setpoints only on a confirmed scale and a plausible value', async (t) => {
-  const { gladys, box, app } = await setup(t);
+test('S4b: without live events, a hub and an option in °C: the setpoint is sent', async (t) => {
+  const { gladys, box } = await setup(t, { ...CONFIG, live_events: false });
+  const thermostat = await created(gladys, 'Thermostat (Entrée)');
+  const ack = await gladys.fake.setValue(thermostat, featureOf(thermostat, 'heatingSetpoint'), 21);
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(box.executed.at(-1), { id: '107', command: 'setHeatingSetpoint', args: [21] });
+});
+
+test('S4c: before the first event, the option and a plausible setpoint decide', async (t) => {
+  const { gladys, box } = await setup(t);
   const thermostat = await created(gladys, 'Thermostat (Entrée)');
   const setpoint = featureOf(thermostat, 'heatingSetpoint');
   let ack = await gladys.fake.setValue(thermostat, setpoint, 21);
-  assert.equal(ack.success, false, 'no unit seen yet');
-  assert.match(ack.error, /échelle de température du hub n'est pas confirmée/);
+  assert.equal(ack.success, true, ack.error);
+  // A hub in °F configured in °C: its setpoint (68) is out of the °C band.
+  box.device('107').attributes.heatingSetpoint = 68;
+  await gladys.fake.scanRequest();
+  ack = await gladys.fake.setValue(thermostat, setpoint, 21);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /pas confirmée/);
+  // An unknown current setpoint is refused too.
+  delete box.device('107').attributes.heatingSetpoint;
+  await gladys.fake.scanRequest();
+  ack = await gladys.fake.setValue(thermostat, setpoint, 21);
+  assert.equal(ack.success, false);
+  assert.equal(box.executed.length, 1);
+});
+
+test('temperature scale: the hub contradicting the option refuses; bands decide', async (t) => {
+  const { gladys, box, app } = await setup(t);
+  const thermostat = await created(gladys, 'Thermostat (Entrée)');
+  const setpoint = featureOf(thermostat, 'heatingSetpoint');
+  let ack;
   // The hub says °F, the option °C: told in the status and the logs, refused.
   box.emit('111', 'temperature', 70, { unit: '°F' });
   await settle();
@@ -601,23 +627,52 @@ test('temperature scale: setpoints only on a confirmed scale and a plausible val
 });
 
 test('watchdog: a change no event told, or a silent socket, opens the socket again', async (t) => {
-  const { app, box, tick } = await setup(t);
+  const { gladys, app, box, tick } = await setup(t);
   assert.equal(box.callsOf('live').length, 1);
+  const lamp = await created(gladys, 'Plafonnier (Salon)');
   box.silently('111', 'motion', 'active');
   await tick(TIMINGS.resync);
-  assert.equal(app.liveState, 'down', 'the missed event is seen');
-  await tick(TIMINGS.liveRetryMin);
+  // Reopened at once, never "down", no degraded badge.
+  assert.equal(box.callsOf('live').length, 2, 'the missed event is seen');
   assert.equal(app.liveState, 'live');
-  assert.equal(box.callsOf('live').length, 2);
+  assert.ok(!gladys.fake.transports.some((e) => e.degraded));
+  assert.deepEqual(lastTransport(gladys, lamp), {
+    device_external_id: lamp.external_id,
+    transport: DEVICE_TRANSPORTS.LOCAL,
+  });
   // No message at all for more than 30 minutes.
   for (let i = 0; i < 7; i += 1) {
     await tick(TIMINGS.resync);
   }
-  await tick(TIMINGS.liveRetryMin);
   assert.ok(box.callsOf('live').length >= 3);
+  assert.equal(app.liveState, 'live');
+  // A reopening that fails: down, the badge says so.
+  box.liveRefusal = new LiveError('network', 'connection refused');
+  box.silently('111', 'motion', 'inactive');
+  await tick(TIMINGS.resync);
+  assert.equal(app.liveState, 'down');
+  assert.equal(lastTransport(gladys, lamp).degraded, true);
 });
 
-test('an energy index that drops once is held; twice, it is a reset', async (t) => {
+test('S9b: an index read at 0 twice, then back: no false consumption', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  box.emit('104', 'energy', 0);
+  await tick(10_000);
+  box.emit('104', 'energy', 0); // the same low value read again: still held
+  await tick(10_000);
+  box.emit('104', 'energy', 312.5);
+  await tick(10_000);
+  assert.deepEqual(
+    statesOf(gladys, energy).map((s) => s.state),
+    [312.4, 312.5],
+    'the index never went through 0',
+  );
+});
+
+test('an energy index that drops is held; a rise above the low value is a reset', async (t) => {
   const { gladys, box, tick } = await setup(t);
   const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
   const energy = `${plug.external_id}:energy`;
@@ -650,4 +705,54 @@ test('a 429 pause covers the scan, the test button and a reconnection to Gladys'
   assert.equal(box.calls.length, calls, 'no request to the hub during the pause');
   await tick(120_000);
   assert.equal(app.online, true);
+});
+
+test('R2: a moving garage door can be stopped while it is guarded', async (t) => {
+  const { gladys, box, tick, app } = await setup(
+    t,
+    { ...CONFIG, allow_garage_door_control: true },
+    (hub) => {
+      hub.device('109').commands.push('stop');
+      hub.slow = { lock: 3000, door: 5000 };
+    },
+  );
+  const garage = await created(gladys, 'Garage (Garage)');
+  const command = featureOf(garage, 'door_command');
+  assert.equal((await gladys.fake.setValue(garage, command, 1)).success, true);
+  await tick(1000); // "opening"
+  assert.ok(app.guards.has('109'));
+  const ack = await gladys.fake.setValue(garage, command, 0);
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(
+    box.executed.map((e) => e.command),
+    ['open', 'stop'],
+  );
+});
+
+test('R3: a command refused as too late at the socket never left: no guard', async (t) => {
+  let skew = 0;
+  const { gladys, box, app } = await setup(
+    t,
+    { ...CONFIG, allow_lock_control: true },
+    (hub) => {
+      hub.onCommand = () => {
+        skew += 4000; // the request waited 4 s before leaving
+      };
+    },
+    { now: () => Date.now() + skew },
+  );
+  const door = await created(gladys, "Porte d'entrée (Entrée)");
+  const lock = featureOf(door, 'lock');
+  let ack = await gladys.fake.setValue(door, lock, 0);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /trop de temps/);
+  assert.equal(box.executed.length, 0);
+  assert.equal(app.guards.has('108'), false);
+  box.onCommand = undefined;
+  ack = await gladys.fake.setValue(door, lock, 0);
+  assert.equal(ack.success, true, ack.error, 'not refused as busy');
+  assert.deepEqual(
+    box.executed.map((e) => e.command),
+    ['unlock'],
+  );
 });

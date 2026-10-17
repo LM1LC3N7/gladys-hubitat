@@ -68,10 +68,12 @@ it.
 - **Temperature scale of the hub**: the scale set in Hubitat (Settings →
   Location and modes). Gladys always shows °C and converts; when the hub gives
   the unit of a reading, the unit wins, and is kept for the next reads. When
-  the hub's units disagree with the option, the connection status says so. A
-  thermostat setpoint is sent only once the scale is confirmed by the hub (the
-  unit of a live event) and the current setpoint is plausible in it (not above
-  45 in °C): without live events, setpoints are refused.
+  the hub's units disagree with the option, the connection status says so and
+  thermostat setpoints are refused. A setpoint is sent in the scale of the
+  hub's unit when known, else in the scale of this option (live events or
+  not), and only when the current setpoint is known and plausible in that
+  scale: up to 35 in °C, from 39 in °F. A °F hub set to °C here is caught that
+  way.
 - **Live events** (on by default): the integration listens to the event socket
   of the hub (`ws://<hub>/eventsocket`). The changes reach Gladys within a
   second, and the button presses reach your scenes. Off, or when the socket is
@@ -102,7 +104,8 @@ it.
   command on it is refused ("a command is already in progress") until it
   reports the state asked for, or for 20 seconds (lock) / 60 seconds (garage
   door). A late report of the old state or an unknown state never lifts the
-  guard. The device is read again after 5 and 15 seconds (and 30 and 60 for a
+  guard. Stopping a moving garage door (when the opener has a stop command)
+  stays possible during the guard. The device is read again after 5 and 15 seconds (and 30 and 60 for a
   garage door); when these reads fail, or the state never comes, its badge
   says "state not confirmed".
 - The commands of one device are sent **one at a time**. Gladys waits 5
@@ -121,10 +124,13 @@ it.
   only arrive through the live events: with them off, the buttons stay silent.
 - **Live events watchdog**: when a full read finds a two-state change (switch,
   contact, motion, lock, door…) that no event told, or when the socket said
-  nothing for 30 minutes, the socket is opened again (orange dot meanwhile).
-- **Energy**: the energy index only goes up; a single drop (a glitch) is held
-  until the next reading, two in a row are taken (the meter was reset). A
-  driver reporting Wh is converted to kWh.
+  nothing for 30 minutes, the socket is opened again at once; the badges only
+  turn orange if that reopening fails.
+- **Energy**: the energy index only goes up. A lower reading is held; it is
+  taken only when a later reading rises above that low value (the meter was
+  reset and counts again). The same low value read again stays held, so an
+  index read at 0 then back to normal makes no false consumption. A driver
+  reporting Wh is converted to kWh.
 - **The event socket carries the events of every device of the hub**, not
   only those you authorized: the integration keeps the authorized ones and
   drops the rest. It needs no token.

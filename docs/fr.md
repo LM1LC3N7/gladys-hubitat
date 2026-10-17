@@ -72,10 +72,12 @@ l'atteint jamais.
   Location and modes). Gladys affiche toujours des °C et convertit ; quand le
   hub donne l'unité d'une mesure, c'est elle qui compte, et elle est gardée
   pour les lectures suivantes. Quand les unités du hub contredisent l'option,
-  l'état de connexion le signale. Une consigne de thermostat n'est envoyée
-  qu'une fois l'échelle confirmée par le hub (l'unité d'un événement en
-  direct) et la consigne actuelle vraisemblable dans cette échelle (pas plus
-  de 45 en °C) : sans événements en direct, les consignes sont refusées.
+  l'état de connexion le signale et les consignes de thermostat sont refusées.
+  Une consigne est envoyée dans l'échelle de l'unité donnée par le hub quand
+  elle est connue, sinon dans celle de cette option (avec ou sans événements
+  en direct), et seulement si la consigne actuelle est connue et vraisemblable
+  dans cette échelle : jusqu'à 35 en °C, à partir de 39 en °F. Un hub en °F
+  réglé ici en °C est ainsi repéré.
 - **Événements en direct** (activés par défaut) : l'intégration écoute le socket
   d'événements du hub (`ws://<hub>/eventsocket`). Les changements arrivent dans
   Gladys en une seconde, et les appuis sur les boutons arrivent à vos scènes.
@@ -112,7 +114,9 @@ l'atteint jamais.
   serrure ou de porte de garage sur lui est refusée (« une commande est déjà
   en cours ») jusqu'à ce qu'il signale l'état demandé, ou pendant 20 secondes
   (serrure) / 60 secondes (porte de garage). Un rapport tardif de l'ancien
-  état ou un état inconnu ne lève jamais la garde. L'appareil est relu après
+  état ou un état inconnu ne lève jamais la garde. Arrêter une porte de garage
+  en mouvement (si l'ouvre-porte a une commande d'arrêt) reste possible
+  pendant la garde. L'appareil est relu après
   5 et 15 secondes (et 30 et 60 pour une porte de garage) ; si ces lectures
   échouent, ou si l'état n'arrive jamais, son badge indique « état non
   confirmé ».
@@ -134,10 +138,13 @@ l'atteint jamais.
 - **Chien de garde des événements en direct** : quand une lecture complète
   trouve un changement d'un état à deux valeurs (interrupteur, contact,
   mouvement, serrure, porte…) qu'aucun événement n'a annoncé, ou quand le
-  socket est resté muet 30 minutes, il est rouvert (point orange en attendant).
-- **Énergie** : l'index d'énergie ne fait que monter ; une baisse isolée (un
-  raté) est retenue jusqu'à la mesure suivante, deux de suite sont acceptées
-  (compteur remis à zéro). Un driver qui donne des Wh est converti en kWh.
+  socket est resté muet 30 minutes, il est rouvert aussitôt ; les badges ne
+  passent à l'orange que si cette réouverture échoue.
+- **Énergie** : l'index d'énergie ne fait que monter. Une valeur plus basse est
+  retenue ; elle n'est acceptée que si une mesure suivante dépasse cette
+  valeur basse (compteur remis à zéro qui recompte). La même valeur basse
+  relue reste retenue : un index lu à 0 puis revenu à la normale ne crée
+  aucune fausse consommation. Un driver qui donne des Wh est converti en kWh.
 - **Le socket d'événements transporte les événements de tous les appareils du
   hub**, pas seulement de ceux que vous avez autorisés : l'intégration garde
   les autorisés et ignore les autres. Il ne demande pas de jeton.

@@ -221,7 +221,7 @@ export function createClient({ url, appId, token, request = httpGet }) {
   const Agent = (url.startsWith('https:') ? https : http).Agent;
   // The reads (a big /devices/all) never hold up a command: commands get their own agent.
   const agent = new Agent({ keepAlive: true, maxSockets: 4 });
-  const commandAgent = new Agent({ keepAlive: true, maxSockets: 2 });
+  const commandAgent = new Agent({ keepAlive: true, maxSockets: 4 });
   const base = `${url}${API.base(appId)}`;
   const send = async (path, { timeout = TIMINGS.requestTimeout, guard } = {}, via = agent) => {
     const ms = typeof timeout === 'function' ? timeout() : timeout;
