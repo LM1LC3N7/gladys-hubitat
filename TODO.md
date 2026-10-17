@@ -94,16 +94,51 @@ up to date at the end of every milestone.
   command is refused until the option is on; checked before anything and
   again when the command gets its turn; the lock read just before
   (`GET /devices/<id>`); refused when that read fails or the state is not
-  locked / unlocked; nothing sent when already in place; read back at 15 s.
-- **Garage doors**: same rule with `allow_garage_door_control`. The state is
-  an opening sensor (`door`), the command a separate `switch/binary` feature
-  (`door_command`, 1 open): Gladys has no garage door category. Refused while
-  opening, closing or unknown. A switch is reached by "turn everything off"
-  scenes and voice assistants: said in the docs and the option description.
+  locked / unlocked; nothing sent when already in place; then guarded (below).
+- **Garage doors** (coordinator decision after review, I1): same rule with
+  `allow_garage_door_control`. The state is an opening sensor (`door`), the
+  command a `shutter/state` feature (`door_command`: OPEN 1, CLOSE -1, STOP 0
+  only with a `stop` / `stopPositionChange` command, else refused), like the
+  garage "cover" of hacs-hubitat; never a switch ("turn everything off").
+  Refused while opening, closing or unknown.
+- **Guard after a lock or garage door command** (review B2, wave 3 lesson):
+  `{ expected, start, sawMoving, until }` per device, set after the request
+  (sent or failed); until it lifts, every guarded command of the device is
+  refused ("a command is already in progress"), never answered "already in
+  place". Lifted only by the expected state (different from the start, or
+  after a move was seen), or at its end (20 s lock, 60 s garage door; then
+  "state not confirmed" badge); never by an unknown state. Read backs at 5 and
+  15 s (garage: 30 and 60 s too); a failed one sets the "state not confirmed"
+  badge, a successful read clears it. The fake hub reports locks and doors
+  1 to 5 s late (tests S1 [unlock, lock], S2 [open, close]).
+- **Sensitive switches** (review B1): a device with Lock, GarageDoorControl,
+  DoorControl, Valve, Alarm or SecurityKeypad never gets a writable switch.
 - **No HSM nor mode command**: the client has no path for them, and a test
   greps the code. Location events of the socket are dropped.
 - **Valves**: not controlled in M1 (a valve driver with a Switch shows its
   switch read-only); a later milestone puts them behind an option.
+- **Reads merged with the events** (review I2): live events are numbered; a
+  read (`/devices/all`, a read back, the fresh read of a command) keeps the
+  value of an attribute an event changed after the read started, and keeps
+  the units seen in events (I3).
+- **Temperature scale** (review I3): a temperature event's unit gives the hub
+  scale; a disagreement with the option is logged once and told in the
+  connection status. A setpoint is refused unless the scale is confirmed (unit
+  of the attribute, or hub scale seen = option) and the current setpoint is
+  plausible (≤ 45 in °C, ≥ 40 in °F). Without live events, no unit is ever
+  seen: setpoints are refused (documented).
+- **Socket watchdog** (review I4): when a full read (started after the socket
+  opened, compared with a baseline also read after) finds a two-state
+  attribute changed without an event, or no message came for 30 minutes, the
+  socket is closed and opened again (degraded badge meanwhile). A refused
+  socket is logged for its first 3 failures, then once in 10 (M7).
+- **Reconnection to Gladys** (wave 3 lesson): `connected` calls `resume()`,
+  which keeps the client, a 429 pause and a refused token's wait when the
+  configuration is the same, and only publishes again. A 429 pause outlives a
+  restart, covers the Scan button and the test button (M4).
+- **Commands**: their own HTTP agent (reads never hold them up); the deadline
+  guard runs again when the request really leaves (socket connected); the
+  option is checked again just before each request (M5, M6).
 - **Command deadline**: set_value is acked within 5 s, so a command not sent
   within 3.5 s of its arrival is refused ("took too long"), never sent late;
   the fresh read gets what is left of the 3.5 s, the command 1 s more. The
@@ -125,12 +160,16 @@ up to date at the end of every milestone.
   only.
 - **Buttons**: one `button/click` feature per button number (1–20); pushed →
   CLICK (1), doubleTapped → DOUBLE_CLICK (2), held → LONG_CLICK_PRESS (3),
-  released → LONG_CLICK_RELEASE (4), sent by `publishStates` (two presses are
+  released → LONG_CLICK_RELEASE (4) right after a held of the same button,
+  else RELEASE (20) (review M1), sent by `publishStates` (two presses are
   two events). Presses come from the live events only (a read cannot tell two
   presses of the same button). They are scene triggers through the "device
   state" trigger of Gladys; dedicated `scene_triggers` are left for later.
 - **Energy**: `energy` (kWh) is a cumulative meter: `switch/energy` on a plug,
-  `energy-sensor/index` on a meter alone, never a daily value.
+  `energy-sensor/index` on a meter alone, never a daily value. A unit `Wh`
+  is converted to kWh; a single drop of the index is held once, a second drop
+  in a row is taken as a reset (review M3).
+- **UV index**: `uv-sensor/integer`, rounded (review I5).
 - **Rates**: states through `publishChangedStates` (30-min heartbeat) within
   250 states a minute, measurements spaced by `sensor_interval` (10 s).
 - **Version 0.1.0 set by hand** in `package.json`, `package-lock.json` and the

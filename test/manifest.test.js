@@ -162,6 +162,8 @@ test('the keys of the manifest are the keys of the code', () => {
   for (const item of manifest.actions) {
     assert.ok(item.timeout_seconds >= 5 && item.timeout_seconds <= 120, item.key);
   }
+  // The test button may read the hub (20 s) and open the socket (10 s): 90 s, as commented.
+  assert.equal(manifest.actions.find((a) => a.key === ACTIONS.TEST).timeout_seconds, 90);
   assert.equal(manifest.scene_actions, undefined);
   assert.equal(manifest.widgets, undefined);
 });

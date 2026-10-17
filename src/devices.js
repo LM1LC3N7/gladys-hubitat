@@ -79,7 +79,12 @@ export function buildModel(idsOf, records, options = {}) {
     model.deviceIds.set(ids.device, record.id);
     model.readers.set(
       record.id,
-      mapped.readers.map(({ key, attrs, read }) => ({ featureId: ids.feature(key), attrs, read })),
+      mapped.readers.map(({ key, attrs, read, meter }) => ({
+        featureId: ids.feature(key),
+        attrs,
+        read,
+        meter: meter === true,
+      })),
     );
     if (mapped.buttons > 0) {
       model.buttons.set(record.id, {

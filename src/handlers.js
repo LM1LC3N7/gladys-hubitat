@@ -21,10 +21,11 @@ export function registerHandlers(gladys, app, logger) {
   // Configuration changed by the user.
   gladys.onConfigUpdated((config) => app.configUpdated(config));
 
-  // Connection lifecycle (also after every reconnection to Gladys).
+  // Connection lifecycle (also after every reconnection to Gladys): a
+  // reconnection keeps the client, a 429 pause and a refused token's wait.
   gladys.on('connected', async () => {
     try {
-      await app.start(await gladys.getConfig());
+      await app.resume(await gladys.getConfig());
     } catch (err) {
       logger?.error('Start failed', err);
     }

@@ -8,11 +8,14 @@
 // again every 5 minutes (missed events, renames, devices authorized since).
 // Without the socket (off in the configuration, refused, lost), the list is
 // read at the configured pace and the socket is tried again in the
-// background. On a failure of the Maker API, reconnect with a growing delay.
+// background. A watchdog opens the socket again when a read finds a change no
+// event told, or when the socket stayed silent too long. On a failure of the
+// Maker API, reconnect with a growing delay; a 429 pauses every path.
 //
 // Commands: one at a time per device, sent within 3.5 s of their arrival or
 // refused; locks and garage doors only when the user allowed them, on a state
-// read just before. No HSM or mode command exists in this integration.
+// read just before, then guarded until the device reports the state asked
+// for. No HSM or mode command exists in this integration.
 // -----------------------------------------------------------------------------
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
@@ -21,16 +24,54 @@ import { BUTTON_EVENTS, TIMINGS } from './constants.js';
 import { buildModel, emptyModel } from './devices.js';
 import { LiveError, openEventSocket } from './eventsocket.js';
 import { HubitatError, createClient } from './hubitat.js';
-import { T, word } from './i18n.js';
-import { BUTTON_STATES } from './mapping.js';
+import { T, scaleMismatch, word } from './i18n.js';
+import { BUTTON_STATES, BUTTON_STATUS, scaleOf } from './mapping.js';
 import { StatePublisher } from './publisher.js';
-import { mergeRecord, recordOf, recordsOf, stringAttr, withAttribute } from './records.js';
+import {
+  mergeRecord,
+  numberAttr,
+  recordOf,
+  recordsOf,
+  stringAttr,
+  withAttribute,
+} from './records.js';
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
-/** The states a lock or a garage door must be in before Gladys acts on it. */
+/** Lock and garage door states, normalized: 1 locked / open, 0 unlocked / closed. */
 const LOCK_KNOWN = { locked: 1, unlocked: 0, 'unlocked with timeout': 0 };
-const DOOR_KNOWN = { open: 1, closed: 0 };
+const DOOR_KNOWN = { open: 1, closed: 0, opening: 'moving', closing: 'moving' };
+
+/** The state of the device a guarded command acts on (undefined when unknown). */
+function guardedState(record, safety) {
+  const known = safety === 'lock' ? LOCK_KNOWN : DOOR_KNOWN;
+  const raw = stringAttr(record, safety === 'lock' ? 'lock' : 'door');
+  return raw !== undefined && Object.hasOwn(known, raw) ? known[raw] : undefined;
+}
+
+/** Two-state attributes the watchdog compares between a read and the events. */
+const WATCHED = new Set([
+  'switch',
+  'contact',
+  'motion',
+  'water',
+  'smoke',
+  'carbonMonoxide',
+  'tamper',
+  'presence',
+  'lock',
+  'door',
+]);
+
+/** Temperature attributes whose event unit tells the scale of the hub. */
+const TEMPERATURES = new Set([
+  'temperature',
+  'heatingSetpoint',
+  'coolingSetpoint',
+  'thermostatSetpoint',
+]);
+
+const sameConfig = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export class HubitatApp {
   constructor({
@@ -54,6 +95,10 @@ export class HubitatApp {
     this.model = emptyModel();
     /** hub device id -> last record (replaced, never mutated) */
     this.records = new Map();
+    /** live events are numbered: a read keeps those numbered after its start */
+    this.eventSeq = 0;
+    /** when (ms) the read that gave `records` started */
+    this.readStartedAt = -Infinity;
     this.online = false;
     /** the live socket, and its state: off | connecting | live | down */
     this.live = null;
@@ -61,6 +106,8 @@ export class HubitatApp {
     this.liveError = undefined;
     this.liveFailures = 0;
     this.liveOpening = undefined;
+    this.liveSince = Infinity;
+    this.lastMessageAt = 0;
     this.running = false;
     /** feature id -> last value read, sent when the user creates the device */
     this.lastValues = new Map();
@@ -69,6 +116,19 @@ export class HubitatApp {
     this.transports = new Map();
     /** hub device id -> the tail of its command chain */
     this.chains = new Map();
+    /** hub device id -> { safety, expected, start, sawMoving, until, timer } */
+    this.guards = new Map();
+    /** hub device ids whose state was not confirmed after a guarded command */
+    this.unconfirmed = new Set();
+    /** "<device>:<button>" held and not released yet */
+    this.held = new Set();
+    /** meter feature id -> { value, dropped } (energy index filter) */
+    this.meters = new Map();
+    /** the scale the hub's events gave ('C' | 'F'), and whether it differs from the option */
+    this.hubScale = undefined;
+    this.scaleMismatch = false;
+    /** a 429 pauses every path until then (survives a reconnection to Gladys) */
+    this.pausedUntil = 0;
     this.readBackTimers = new Set();
     this.timer = undefined;
     this.modelTimer = undefined;
@@ -100,8 +160,38 @@ export class HubitatApp {
     });
     this.running = true;
     this.publisher.start();
+    const paused = this.pausedUntil - this.now();
+    if (paused > 0) {
+      // A 429 pause outlives a restart: wait for its end.
+      await this.setStatus(false, T.failure({ kind: 'rate' }));
+      this.schedule(generation, paused, () => this.open(generation));
+      return;
+    }
     await this.setStatus(false, T.connecting);
     await this.open(generation);
+  }
+
+  /**
+   * Gladys (re)connected: the same configuration keeps everything (client,
+   * 429 pause, refused token waiting its retry) and publishes again what
+   * Gladys may have missed; another one starts again.
+   */
+  async resume(raw = {}) {
+    if (!this.running || !sameConfig(normalizeConfig(raw), this.config)) {
+      await this.start(raw);
+      return;
+    }
+    this.refreshCreated();
+    this.lastStatus = undefined;
+    this.transports.clear();
+    if (this.online) {
+      this.publishedDevices = undefined;
+      await this.rebuild();
+      await this.connectedStatus();
+    } else {
+      await this.setStatus(false, this.lastError ? T.failure(this.lastError) : T.connecting);
+    }
+    await this.publishAllTransports();
   }
 
   /** The configuration changed: start again with it. */
@@ -116,6 +206,10 @@ export class HubitatApp {
     for (const timer of [this.timer, this.modelTimer, this.liveTimer, ...this.readBackTimers]) {
       this.timers.clearTimeout(timer);
     }
+    for (const guard of this.guards.values()) {
+      this.timers.clearTimeout(guard.timer);
+    }
+    this.guards.clear();
     this.readBackTimers.clear();
     this.timer = undefined;
     this.modelTimer = undefined;
@@ -134,6 +228,10 @@ export class HubitatApp {
     return generation === this.generation;
   }
 
+  paused() {
+    return this.now() < this.pausedUntil;
+  }
+
   async setStatus(connected, message) {
     const key = JSON.stringify([connected, message ?? null]);
     if (key === this.lastStatus) {
@@ -146,15 +244,18 @@ export class HubitatApp {
   }
 
   async connectedStatus() {
-    await this.setStatus(
-      true,
-      T.connected(
-        this.model.devices.length,
-        this.liveState,
-        this.liveError,
-        this.config.pollInterval,
-      ),
+    const message = T.connected(
+      this.model.devices.length,
+      this.liveState,
+      this.liveError,
+      this.config.pollInterval,
     );
+    if (this.scaleMismatch) {
+      const extra = scaleMismatch(this.hubScale);
+      message.en = `${message.en} ${extra.en}`;
+      message.fr = `${message.fr} ${extra.fr}`;
+    }
+    await this.setStatus(true, message);
   }
 
   warnOnce(key, message) {
@@ -187,7 +288,7 @@ export class HubitatApp {
       this.client?.close?.();
       const { url, appId, token } = this.config;
       this.client = this.connect({ url, appId, token });
-      await this.loadAll(generation, { initial: true });
+      await this.loadAll(generation);
       if (!this.current(generation)) {
         return;
       }
@@ -235,6 +336,9 @@ export class HubitatApp {
     this.failures += 1;
     this.lastError = err;
     const delay = this.retryDelay(err);
+    if (err?.kind === 'rate') {
+      this.pausedUntil = Math.max(this.pausedUntil, this.now() + delay);
+    }
     if (err instanceof HubitatError) {
       this.logger.warn(`Hubitat: ${err.message} (retrying in ${Math.round(delay / 1000)} s)`);
     } else {
@@ -243,6 +347,18 @@ export class HubitatApp {
     await this.setStatus(false, T.failure(err));
     await this.publishAllTransports();
     this.schedule(generation, delay, () => this.open(generation));
+  }
+
+  /** A 429 on any path (command, read back, scan, test) pauses the whole integration. */
+  pauseOn(err) {
+    if (err?.kind !== 'rate') {
+      return;
+    }
+    const delay = this.retryDelay(err);
+    this.pausedUntil = Math.max(this.pausedUntil, this.now() + delay);
+    if (this.online) {
+      this.background(this.fail(this.generation, err));
+    }
   }
 
   // --- Reading the devices ---------------------------------------------------------
@@ -269,13 +385,22 @@ export class HubitatApp {
       }
     }
     if (this.current(generation) && this.online) {
+      if (this.liveState === 'live' && this.now() - this.lastMessageAt > TIMINGS.liveSilence) {
+        this.liveLost(generation, 'no message on the event socket for 30 minutes');
+      }
       await this.connectedStatus();
       this.scheduleRead(generation);
     }
   }
 
-  /** Reads every authorized device; publishes the devices and the values. */
+  /**
+   * Reads every authorized device; publishes the devices and the values. An
+   * attribute a live event changed after the start of the read keeps the
+   * event's value, and the units seen in events are kept.
+   */
   async loadAll(generation, { force = false } = {}) {
+    const since = this.eventSeq;
+    const startedAt = this.now();
     const answer = await this.client.devicesAll();
     if (!this.current(generation)) {
       return;
@@ -283,11 +408,44 @@ export class HubitatApp {
     if (!Array.isArray(answer)) {
       throw new HubitatError('format', 'the device list is not a list');
     }
-    this.records = recordsOf(answer);
+    const fresh = recordsOf(answer);
+    const watch = this.liveState === 'live' && this.readStartedAt >= this.liveSince;
+    let missed;
+    const merged = new Map();
+    for (const [id, record] of fresh) {
+      const known = this.records.get(id);
+      if (watch && known && !missed) {
+        missed = this.missedChange(known, record, since);
+      }
+      merged.set(id, mergeRecord(known, record, { since, keepMissing: false }));
+    }
+    this.records = merged;
+    this.readStartedAt = startedAt;
     await this.rebuild({ force });
     for (const record of this.records.values()) {
+      if (!this.guards.has(record.id)) {
+        this.unconfirmed.delete(record.id);
+      }
       this.applyRecord(record);
     }
+    if (missed) {
+      this.liveLost(generation, `a change of ${missed} came with no live event`);
+    }
+  }
+
+  /** A two-state attribute the read finds changed, though no event told it: its name. */
+  missedChange(known, fresh, since) {
+    for (const name of WATCHED) {
+      const before = known.attributes.get(name);
+      const after = fresh.attributes.get(name);
+      if (!before || !after || (before.at !== undefined && before.at > since)) {
+        continue;
+      }
+      if (String(before.value) !== String(after.value)) {
+        return `${known.id}:${name}`;
+      }
+    }
+    return undefined;
   }
 
   /** The model from the records; published when it changed. */
@@ -315,7 +473,7 @@ export class HubitatApp {
     }
   }
 
-  /** One record: its values to the features, its badge. */
+  /** One record: its values to the features, its guard, its badge. */
   applyRecord(record, attrs) {
     for (const reader of this.model.readers.get(record.id) ?? []) {
       if (attrs && !reader.attrs.some((a) => attrs.includes(a))) {
@@ -328,11 +486,27 @@ export class HubitatApp {
         this.warnOnce(`read:${reader.featureId}`, `${reader.featureId}: ${err.message}`);
         continue;
       }
-      if (value) {
+      if (value && (!reader.meter || this.meterOk(reader.featureId, value))) {
         this.record(reader.featureId, value);
       }
     }
+    this.checkGuard(record);
     this.publishTransportOf(record.id);
+  }
+
+  /**
+   * An energy index only goes up: a single drop is held (a glitch of the
+   * driver), a second one in a row is taken (the meter was reset).
+   */
+  meterOk(featureId, { state }) {
+    const last = this.meters.get(featureId);
+    if (last && state < last.value && !last.dropped) {
+      last.dropped = true;
+      this.warnOnce(`drop:${featureId}`, `${featureId}: energy index went down, held once`);
+      return false;
+    }
+    this.meters.set(featureId, { value: state, dropped: false });
+    return true;
   }
 
   /** Keeps the value, and sends it when the device exists in Gladys. */
@@ -361,6 +535,9 @@ export class HubitatApp {
           this.onLiveEvent(generation, event);
         }
       },
+      onMessage: () => {
+        this.lastMessageAt = this.now();
+      },
       onClose: (reason) => {
         if (this.current(generation)) {
           this.live = null;
@@ -380,9 +557,15 @@ export class HubitatApp {
         }
         this.live = session;
         this.liveState = 'live';
+        this.liveSince = this.now();
+        this.lastMessageAt = this.now();
+        if (this.liveFailures > 0) {
+          this.logger.info(`Live events on again after ${this.liveFailures} failure(s)`);
+        } else {
+          this.logger.info('Live events on (hub event socket)');
+        }
         this.liveFailures = 0;
         this.liveError = undefined;
-        this.logger.info('Live events on (hub event socket)');
         await this.connectedStatus();
         await this.publishAllTransports();
         // The changes between the last read and the socket: read once now.
@@ -393,21 +576,35 @@ export class HubitatApp {
       .catch((err) => this.liveFailed(generation, err));
   }
 
+  /** The watchdog: the socket seems deaf, open it again. */
+  liveLost(generation, reason) {
+    this.logger.warn(`Hubitat live events: ${reason}, opening the event socket again`);
+    const session = this.live;
+    this.live = null;
+    session?.close();
+    this.background(this.liveFailed(generation, new LiveError('closed', reason)));
+  }
+
   async liveFailed(generation, err) {
     if (!this.current(generation) || !this.online) {
       return;
     }
     const wasDown = this.liveState === 'down';
     this.liveState = 'down';
+    this.liveSince = Infinity;
     this.liveError = err;
     this.liveFailures += 1;
     const delay = Math.min(
       TIMINGS.liveRetryMax,
       TIMINGS.liveRetryMin * 2 ** (this.liveFailures - 1),
     );
-    this.logger.warn(
-      `Hubitat live events: ${err?.message ?? err} (reading every ${this.config.pollInterval} s, socket again in ${Math.round(delay / 1000)} s)`,
-    );
+    // A refused socket is told for its first failures, then once in a while.
+    const n = this.liveFailures;
+    if (n <= TIMINGS.liveWarnFirst || n % TIMINGS.liveWarnEvery === 0) {
+      this.logger.warn(
+        `Hubitat live events: ${err?.message ?? err} (failure ${n}; reading every ${this.config.pollInterval} s, socket again in ${Math.round(delay / 1000)} s)`,
+      );
+    }
     this.timers.clearTimeout(this.liveTimer);
     this.liveTimer = this.timers.setTimeout(() => {
       this.liveTimer = undefined;
@@ -425,6 +622,7 @@ export class HubitatApp {
     this.live = null;
     session?.close();
     this.liveState = state;
+    this.liveSince = Infinity;
   }
 
   /** One device event of the hub: a press, or an attribute of an authorized device. */
@@ -438,13 +636,39 @@ export class HubitatApp {
       this.press(record.id, event.name, event.value);
       return;
     }
-    const updated = withAttribute(record, event.name, event.value, event.unit);
+    if (TEMPERATURES.has(event.name)) {
+      this.noteScale(event.unit);
+    }
+    this.eventSeq += 1;
+    const updated = withAttribute(record, event.name, event.value, event.unit, this.eventSeq);
     this.records.set(record.id, updated);
     if (event.name === 'numberOfButtons') {
       this.scheduleModel(generation);
       return;
     }
     this.applyRecord(updated, [event.name]);
+  }
+
+  /** The unit of a temperature event: the scale of the hub, told when it is not the option's. */
+  noteScale(unit) {
+    const seen = scaleOf(unit, undefined);
+    if (!seen) {
+      return;
+    }
+    this.hubScale = seen;
+    const mismatch = seen !== this.config.temperatureScale;
+    if (mismatch) {
+      this.warnOnce(
+        'scale',
+        `The hub reports °${seen} but the temperature scale option is °${this.config.temperatureScale}`,
+      );
+    }
+    if (mismatch !== this.scaleMismatch) {
+      this.scaleMismatch = mismatch;
+      if (this.online) {
+        this.background(this.connectedStatus());
+      }
+    }
   }
 
   /** A button event: one state per press, sent even when equal to the last. */
@@ -454,9 +678,19 @@ export class HubitatApp {
     if (!buttons || !Number.isInteger(n) || n < 1 || n > buttons.count) {
       return;
     }
+    const key = `${id}:${n}`;
+    let state = BUTTON_STATES[name];
+    if (name === 'held') {
+      this.held.add(key);
+    } else if (name === 'released' && this.held.delete(key)) {
+      // The end of a long press.
+      state = BUTTON_STATUS.LONG_CLICK_RELEASE;
+    } else {
+      this.held.delete(key);
+    }
     const featureId = buttons.featureOf(n);
     if (this.created.has(featureId)) {
-      this.publisher.pushEvent(featureId, { state: BUTTON_STATES[name] });
+      this.publisher.pushEvent(featureId, { state });
     }
   }
 
@@ -482,25 +716,34 @@ export class HubitatApp {
     return this.model.deviceIds.has(ids.device) ? ids.device : undefined;
   }
 
-  /** The Scan button of the Discovery tab. */
+  /** The Scan button of the Discovery tab (never during a 429 pause). */
   async rescan() {
-    if (!this.online || !this.client) {
+    if (!this.online || !this.client || this.paused()) {
       await this.gladys.publishDiscoveredDevices(this.model.devices);
       return;
     }
-    await this.loadAll(this.generation, { force: true });
+    try {
+      await this.loadAll(this.generation, { force: true });
+    } catch (err) {
+      this.pauseOn(err);
+      throw err;
+    }
   }
 
   // --- Transport badges ----------------------------------------------------------
 
-  /** The badge of a device: hub reachable, the device online, the live events on. */
+  /** The badge of a device: hub reachable, the device online and confirmed, the live events on. */
   transportOf(deviceId) {
     if (!this.online) {
       return { transport: DEVICE_TRANSPORTS.UNREACHABLE };
     }
-    const record = this.records.get(this.model.deviceIds.get(deviceId));
+    const id = this.model.deviceIds.get(deviceId);
+    const record = this.records.get(id);
     if (stringAttr(record, 'healthStatus') === 'offline') {
       return { transport: DEVICE_TRANSPORTS.UNREACHABLE, degraded: true, message: T.badge.offline };
+    }
+    if (this.unconfirmed.has(id)) {
+      return { transport: DEVICE_TRANSPORTS.LOCAL, degraded: true, message: T.badge.unconfirmed };
     }
     if (this.liveState === 'down') {
       return {
@@ -606,13 +849,6 @@ export class HubitatApp {
     return run;
   }
 
-  /** A 429 on any path (command, read back) pauses the whole integration. */
-  pauseOn(err) {
-    if (err?.kind === 'rate' && this.online) {
-      this.background(this.fail(this.generation, err));
-    }
-  }
-
   /** Whether the option of a guarded command is on. */
   allowed(safety) {
     if (safety === 'lock') {
@@ -622,6 +858,21 @@ export class HubitatApp {
       return this.config.allowGarage;
     }
     return true;
+  }
+
+  /** Refuses a guarded command whose option is off. */
+  checkAllowed(writer) {
+    if (!this.allowed(writer.safety)) {
+      throw this.denied(writer.safety === 'lock' ? 'lockOff' : 'garageOff');
+    }
+  }
+
+  /** Refuses a guarded command while the previous one is not confirmed. */
+  checkNotGuarded(id) {
+    const guard = this.guards.get(id);
+    if (guard && this.now() < guard.until) {
+      throw this.denied('busy');
+    }
   }
 
   /**
@@ -649,9 +900,11 @@ export class HubitatApp {
 
   /**
    * A lock or a garage door, read just now: the commands to send (none when
-   * already in place), or a refusal when its state is unknown or moving.
+   * already in place), the state asked for and the state before, or a refusal
+   * when its state is unknown or moving.
    */
   async freshPlan(id, writer, value, options) {
+    const since = this.eventSeq;
     let answer;
     try {
       answer = await this.client.device(id, options.read);
@@ -667,36 +920,99 @@ export class HubitatApp {
     if (!fresh || fresh.id !== id) {
       throw this.denied('unknownState');
     }
-    const record = mergeRecord(this.records.get(id), fresh);
+    const record = mergeRecord(this.records.get(id), fresh, { since });
     this.records.set(id, record);
+    this.unconfirmed.delete(id);
     this.applyRecord(record);
-    const wanted = Number(value) > 0 ? 1 : 0;
-    const known = writer.safety === 'lock' ? LOCK_KNOWN : DOOR_KNOWN;
-    const state = stringAttr(record, writer.safety === 'lock' ? 'lock' : 'door');
-    if (state === undefined || !Object.hasOwn(known, state)) {
+    const state = guardedState(record, writer.safety);
+    const v = Number(value);
+    if (writer.safety === 'garage' && v === 0) {
+      // Stop (refused without a stop command): only a moving door has something to stop.
+      const calls = writer.write(0, record);
+      return { calls: state === 'moving' ? calls : [] };
+    }
+    if (state === undefined || state === 'moving') {
       throw this.denied(writer.safety === 'lock' ? 'unknownState' : 'moving');
     }
-    return known[state] === wanted ? [] : writer.write(wanted, record);
+    const expected = v > 0 ? 1 : 0;
+    if (state === expected) {
+      return { calls: [] };
+    }
+    return { calls: writer.write(v, record), expected, start: state };
   }
 
-  /** Reads one device back later (no live events, or a slow motor). */
-  readBack(id, delay) {
+  /** After a guarded command: no other one until the device reports `expected`. */
+  setGuard(id, safety, expected, start) {
+    const previous = this.guards.get(id);
+    this.timers.clearTimeout(previous?.timer);
+    const span = TIMINGS.guard[safety];
+    const guard = { safety, expected, start, sawMoving: false, until: this.now() + span };
+    guard.timer = this.timers.setTimeout(() => {
+      if (this.guards.get(id) === guard) {
+        this.guards.delete(id);
+        // Never confirmed in time: told on the badge until a read shows a state.
+        this.logger.warn(`Device ${id}: the state asked for was not reported in time`);
+        this.unconfirmed.add(id);
+        this.publishTransportOf(id);
+      }
+    }, span);
+    this.guards.set(id, guard);
+    // An event that came during the request may already report the state asked for.
+    const record = this.records.get(id);
+    if (record) {
+      this.checkGuard(record);
+    }
+    for (const delay of TIMINGS.guardReadBacks[safety]) {
+      this.readBack(id, delay, { guarded: true });
+    }
+  }
+
+  /**
+   * A new state of a guarded device: a move is noted; the guard is lifted only
+   * on the state asked for, and on the state it started from only after a
+   * move was seen (a delayed report never lifts it); never on an unknown state.
+   */
+  checkGuard(record) {
+    const guard = this.guards.get(record.id);
+    if (!guard) {
+      return;
+    }
+    const state = guardedState(record, guard.safety);
+    if (state === 'moving') {
+      guard.sawMoving = true;
+      return;
+    }
+    if (state === guard.expected && (state !== guard.start || guard.sawMoving)) {
+      this.timers.clearTimeout(guard.timer);
+      this.guards.delete(record.id);
+      this.unconfirmed.delete(record.id);
+    }
+  }
+
+  /** Reads one device back later (no live events, or a guarded device). */
+  readBack(id, delay, { guarded = false } = {}) {
     const generation = this.generation;
     const timer = this.timers.setTimeout(async () => {
       this.readBackTimers.delete(timer);
-      if (!this.current(generation) || !this.online || !this.client) {
+      if (!this.current(generation) || !this.online || !this.client || this.paused()) {
         return;
       }
+      const since = this.eventSeq;
       try {
         const fresh = recordOf(await this.client.device(id));
         if (fresh && fresh.id === id && this.current(generation)) {
-          const record = mergeRecord(this.records.get(id), fresh);
+          const record = mergeRecord(this.records.get(id), fresh, { since });
           this.records.set(id, record);
+          this.unconfirmed.delete(id);
           this.applyRecord(record);
         }
       } catch (err) {
         this.pauseOn(err);
         this.logger.warn(`Read back of device ${id} failed: ${err.message}`);
+        if (guarded && this.current(generation)) {
+          this.unconfirmed.add(id);
+          this.publishTransportOf(id);
+        }
       }
     }, delay);
     this.readBackTimers.add(timer);
@@ -712,28 +1028,37 @@ export class HubitatApp {
       if (!writer || id === undefined) {
         throw this.denied('notCommand');
       }
-      if (!this.allowed(writer.safety)) {
-        throw this.denied(writer.safety === 'lock' ? 'lockOff' : 'garageOff');
+      this.checkAllowed(writer);
+      if (this.paused()) {
+        throw this.denied('paused');
       }
       if (!this.client || !this.online) {
         throw this.denied('notConnected');
       }
+      if (writer.safety) {
+        this.checkNotGuarded(id);
+      }
       await this.serialized(id, async () => {
-        // The options may have changed while the command waited for its turn.
-        if (!this.allowed(writer.safety)) {
-          throw this.denied(writer.safety === 'lock' ? 'lockOff' : 'garageOff');
-        }
+        // The options and the guard may have changed while the command waited.
+        this.checkAllowed(writer);
         const client = this.client;
         if (!client || !this.online) {
           throw this.denied('notConnected');
         }
         const options = this.commandOptions(deadline);
         options.check();
-        let calls;
+        let plan;
         try {
-          calls = writer.safety
-            ? await this.freshPlan(id, writer, value, options)
-            : writer.write(value, this.records.get(id));
+          if (writer.safety) {
+            this.checkNotGuarded(id);
+            plan = await this.freshPlan(id, writer, value, options);
+          } else {
+            const record = this.records.get(id);
+            if (writer.temperature) {
+              this.checkScale(record, writer.temperature);
+            }
+            plan = { calls: writer.write(value, record) };
+          }
         } catch (err) {
           // A refusal of the mapping (src/mapping.js) gets its text in the user's language.
           if (err?.refusal && !err.localized) {
@@ -741,21 +1066,28 @@ export class HubitatApp {
           }
           throw err;
         }
+        let sent = false;
         try {
-          for (const call of calls) {
+          for (const call of plan.calls) {
+            // The option is checked once more just before the request leaves.
+            this.checkAllowed(writer);
+            sent = true;
             await client.command(id, call.command, call.args, options.send);
           }
         } finally {
-          if (calls.length > 0) {
+          if (sent) {
+            if (writer.safety && plan.expected !== undefined) {
+              // Set after the request, sent or failed (it may have reached the device).
+              this.setGuard(id, writer.safety, plan.expected, plan.start);
+            } else if (writer.safety) {
+              this.readBack(id, TIMINGS.guardReadBacks[writer.safety][0], { guarded: true });
+            }
             if (this.liveState !== 'live') {
               this.readBack(id, TIMINGS.commandEcho);
             }
-            if (writer.safety) {
-              this.readBack(id, TIMINGS.slowReadBack);
-            }
           }
         }
-        this.logger.debug(`${calls.length} Hubitat command(s) for ${featureId}`);
+        this.logger.debug(`${plan.calls.length} Hubitat command(s) for ${featureId}`);
       });
     } catch (err) {
       // Gladys shows the value asked for: send the known one again.
@@ -769,6 +1101,29 @@ export class HubitatApp {
     }
   }
 
+  /**
+   * A setpoint is sent only when the scale of the hub is confirmed (the unit
+   * of the attribute, or of the hub's events, agreeing with the option) and
+   * the current value is plausible in it.
+   */
+  checkScale(record, attr) {
+    const unitScale = scaleOf(record?.attributes.get(attr)?.unit, undefined);
+    const scale =
+      unitScale ??
+      (this.hubScale === this.config.temperatureScale ? this.config.temperatureScale : undefined);
+    if (!scale) {
+      throw this.denied('scaleUnknown');
+    }
+    const current = numberAttr(record, attr);
+    if (current !== undefined && (scale === 'C' ? current > 45 : current < 40)) {
+      this.warnOnce(
+        `implausible:${record.id}`,
+        `Device ${record.id}: ${attr} ${current} in °${scale}?`,
+      );
+      throw this.denied('scaleUnknown');
+    }
+  }
+
   // --- Configuration screen button ---------------------------------------------------
 
   /** Reads the Maker API with the saved configuration, tries the event socket, counts. */
@@ -776,6 +1131,10 @@ export class HubitatApp {
     const config = this.config;
     if (config.error) {
       return T.configError(config.error);
+    }
+    if (this.paused()) {
+      // A 429 pause covers the test too.
+      return T.failure({ kind: 'rate' });
     }
     const client = this.connect({ url: config.url, appId: config.appId, token: config.token });
     try {
@@ -811,6 +1170,7 @@ export class HubitatApp {
         live,
       });
     } catch (err) {
+      this.pauseOn(err);
       if (!(err instanceof HubitatError)) {
         this.logger.error('Connection test failed', err);
       }

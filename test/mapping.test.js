@@ -7,6 +7,7 @@ import {
   BUTTON_STATUS,
   COVER_STATE,
   MIREDS,
+  SENSITIVE_CAPABILITIES,
   fromCelsius,
   hsToRgbInt,
   kelvinToMireds,
@@ -165,7 +166,65 @@ test('locks and garage doors are commands marked for the safety checks', () => {
   assert.equal(garage.writers.door_command.safety, 'garage');
   assert.equal(garage.writers.door, undefined);
   assert.deepEqual(read(garage, 'door', records.get('109')), { state: 1 }, 'closed is 1');
-  assert.deepEqual(read(garage, 'door_command', records.get('109')), { state: 0 });
+  // The command is a cover state, never a switch ("turn everything off").
+  const command = feature(garage, 'door_command');
+  assert.deepEqual(
+    [command.category, command.type, command.min, command.max],
+    ['shutter', 'state', -1, 1],
+  );
+  assert.deepEqual(read(garage, 'door_command', records.get('109')), { state: COVER_STATE.CLOSE });
+  const opening = withAttribute(records.get('109'), 'door', 'opening');
+  assert.deepEqual(read(garage, 'door_command', opening), { state: COVER_STATE.OPEN });
+  assert.deepEqual(garage.writers.door_command.write(1), [{ command: 'open', args: [] }]);
+  assert.deepEqual(garage.writers.door_command.write(-1), [{ command: 'close', args: [] }]);
+  assert.throws(() => garage.writers.door_command.write(0), { refusal: 'unsupported' });
+  const withStop = { ...records.get('109'), commands: new Set(['open', 'close', 'stop']) };
+  assert.deepEqual(mapDevice(withStop).writers.door_command.write(0), [
+    { command: 'stop', args: [] },
+  ]);
+});
+
+test('the switch of a lock, door, valve, siren or keypad is read-only, one by one', () => {
+  for (const capability of SENSITIVE_CAPABILITIES) {
+    const record = {
+      ...records.get('105'),
+      capabilities: new Set(['Switch', capability]),
+    };
+    const m = mapDevice(record);
+    assert.equal(feature(m, 'switch').read_only, true, capability);
+    assert.equal(m.writers.switch, undefined, capability);
+  }
+  assert.deepEqual(SENSITIVE_CAPABILITIES, [
+    'Lock',
+    'GarageDoorControl',
+    'DoorControl',
+    'Valve',
+    'Alarm',
+    'SecurityKeypad',
+  ]);
+  // A plain switch stays writable.
+  assert.equal(feature(mapped('105'), 'switch').read_only, false);
+});
+
+test('UV index as an integer; an energy meter in Wh converted to kWh', () => {
+  const uv = mapDevice({
+    ...records.get('112'),
+    capabilities: new Set(['UltravioletIndex']),
+    attributes: new Map([['ultravioletIndex', { value: '3.6' }]]),
+  });
+  assert.deepEqual(
+    [feature(uv, 'ultravioletIndex').category, feature(uv, 'ultravioletIndex').type],
+    ['uv-sensor', 'integer'],
+  );
+  const uvRecord = { attributes: new Map([['ultravioletIndex', { value: '3.6' }]]) };
+  assert.deepEqual(uv.readers[0].read(uvRecord), { state: 4 });
+  const plug = mapped('104');
+  const energy = plug.readers.find((r) => r.key === 'energy');
+  assert.equal(energy.meter, true);
+  assert.deepEqual(energy.read(withAttribute(records.get('104'), 'energy', 1500, 'Wh')), {
+    state: 1.5,
+  });
+  assert.deepEqual(energy.read(records.get('104')), { state: 312.4 });
 });
 
 test('sensors, and buttons fed by events only', () => {

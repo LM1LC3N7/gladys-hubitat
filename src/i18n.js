@@ -222,6 +222,10 @@ export const T = {
       en: 'Hubitat reports this device offline.',
       fr: 'Hubitat indique que cet appareil est hors ligne.',
     },
+    unconfirmed: {
+      en: 'State not confirmed after the last command: the device could not be read back.',
+      fr: "État non confirmé après la dernière commande : l'appareil n'a pas pu être relu.",
+    },
   },
   /** Refusals of a command, by key. */
   denied: {
@@ -258,5 +262,23 @@ export const T = {
       en: 'Refused: the hub took too long, the command was not sent.',
       fr: "Refusé : le hub a mis trop de temps, la commande n'a pas été envoyée.",
     },
+    busy: {
+      en: 'Refused: a command is already in progress on this device; wait until it reports its new state.',
+      fr: "Refusé : une commande est déjà en cours sur cet appareil ; attendez qu'il signale son nouvel état.",
+    },
+    scaleUnknown: {
+      en: 'Refused: the temperature scale of the hub is not confirmed (check the "Temperature scale of the hub" option and the live events).',
+      fr: "Refusé : l'échelle de température du hub n'est pas confirmée (vérifiez l'option « Échelle de température du hub » et les événements en direct).",
+    },
+    paused: {
+      en: 'Refused: the hub asked to slow down, the integration is paused.',
+      fr: "Refusé : le hub a demandé de ralentir, l'intégration est en pause.",
+    },
   },
 };
+
+/** The scale of the hub differs from the option (added to the connection status). */
+export const scaleMismatch = (seen) => ({
+  en: `The hub reports temperatures in °${seen}, unlike the "Temperature scale of the hub" option: check it.`,
+  fr: `Le hub donne ses températures en °${seen}, contrairement à l'option « Échelle de température du hub » : vérifiez-la.`,
+});

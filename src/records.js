@@ -94,9 +94,22 @@ export function recordsOf(answer) {
  * attributes win; capabilities and commands are kept when the new answer
  * omits them.
  */
-export function mergeRecord(known, fresh) {
+export function mergeRecord(known, fresh, { since = Infinity, keepMissing = true } = {}) {
   if (!known) {
     return fresh;
+  }
+  /** A live event numbered after the start of the read is newer than the answer. */
+  const newer = (a) => a?.at !== undefined && a.at > since;
+  const attributes = new Map(
+    keepMissing ? known.attributes : [...known.attributes].filter(([, a]) => newer(a)),
+  );
+  for (const [name, a] of fresh.attributes) {
+    const old = known.attributes.get(name);
+    if (newer(old)) {
+      continue;
+    }
+    // The answers carry no unit: the one seen in an event is kept.
+    attributes.set(name, { ...a, unit: a.unit ?? old?.unit, values: a.values ?? old?.values });
   }
   return {
     ...known,
@@ -105,19 +118,23 @@ export function mergeRecord(known, fresh) {
     ),
     capabilities: fresh.capabilities.size > 0 ? fresh.capabilities : known.capabilities,
     commands: fresh.commands.size > 0 ? fresh.commands : known.commands,
-    attributes: new Map([...known.attributes, ...fresh.attributes]),
+    attributes,
   };
 }
 
-/** A new record with one attribute changed (a live event). */
-export function withAttribute(record, name, value, unit) {
+/** A new record with one attribute changed (a live event, `at` its sequence number). */
+export function withAttribute(record, name, value, unit, at) {
   const attributes = new Map(record.attributes);
   const previous = attributes.get(name);
-  attributes.set(name, {
+  const next = {
     value: valueOf(value),
     unit: typeof unit === 'string' && unit !== '' ? unit : previous?.unit,
     values: previous?.values,
-  });
+  };
+  if (at !== undefined) {
+    next.at = at;
+  }
+  attributes.set(name, next);
   return { ...record, attributes };
 }
 

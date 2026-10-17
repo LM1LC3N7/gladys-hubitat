@@ -114,6 +114,21 @@ test('a real request: path, token in the query, timeout, no token in the errors'
     /too late/,
   );
   assert.equal(seen.length, before);
+  // Checked again when the request really leaves (its socket connected).
+  let checks = 0;
+  await assert.rejects(
+    client.command('5', 'on', [], {
+      guard: () => {
+        checks += 1;
+        if (checks > 1) {
+          throw new Error('too late at the socket');
+        }
+      },
+    }),
+    /too late at the socket/,
+  );
+  assert.equal(checks, 2);
+  assert.equal(seen.length, before);
 
   const wrong = createClient({ url: 'http://127.0.0.1:1', appId: '12', token: 'se cret' });
   t.after(() => wrong.close());

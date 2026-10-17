@@ -44,14 +44,18 @@ export const BUTTON_STATUS = {
   DOUBLE_CLICK: 2,
   LONG_CLICK_PRESS: 3,
   LONG_CLICK_RELEASE: 4,
+  RELEASE: 20,
 };
 
-/** Hubitat button event -> Gladys button status. */
+/**
+ * Hubitat button event -> Gladys button status. `released` is RELEASE, or
+ * LONG_CLICK_RELEASE right after a `held` of the same button (see the app).
+ */
 export const BUTTON_STATES = {
   pushed: BUTTON_STATUS.CLICK,
   doubleTapped: BUTTON_STATUS.DOUBLE_CLICK,
   held: BUTTON_STATUS.LONG_CLICK_PRESS,
-  released: BUTTON_STATUS.LONG_CLICK_RELEASE,
+  released: BUTTON_STATUS.RELEASE,
 };
 
 /** windowShade / windowBlind -> Gladys cover state (moving = the way it goes). */
@@ -209,7 +213,10 @@ const MEASURES = {
   humidity: [['RelativeHumidityMeasurement'], decimal(C.HUMIDITY_SENSOR, 0, 100, U.PERCENT)],
   illuminance: [['IlluminanceMeasurement'], decimal(C.LIGHT_SENSOR, 0, 200_000, U.LUX)],
   carbonDioxide: [['CarbonDioxideMeasurement'], decimal(C.CO2_SENSOR, 0, 100_000, U.PPM)],
-  ultravioletIndex: [['UltravioletIndex'], decimal(C.UV_SENSOR, 0, 20, U.UV_INDEX)],
+  ultravioletIndex: [
+    ['UltravioletIndex'],
+    decimal(C.UV_SENSOR, 0, 20, U.UV_INDEX, T.UV_SENSOR.INTEGER),
+  ],
   voltage: [
     ['VoltageMeasurement'],
     decimal(C.ENERGY_SENSOR, 0, 100_000, U.VOLT, T.ENERGY_SENSOR.VOLTAGE),
@@ -278,6 +285,16 @@ const BINARIES = {
     values: { present: 1, 'not present': 0 },
   },
 };
+
+/** Capabilities whose device never gets a writable switch (see onoff). */
+export const SENSITIVE_CAPABILITIES = [
+  'Lock',
+  'GarageDoorControl',
+  'DoorControl',
+  'Valve',
+  'Alarm',
+  'SecurityKeypad',
+];
 
 /** Capabilities read through others, or with nothing to show (no warning). */
 const QUIET = new Set([
@@ -369,7 +386,13 @@ class DeviceMapper {
    * @param {string[]} attrs the attributes it reads
    * @param {{ read?: Function, write?: Function, safety?: string, throttle?: boolean, feedback?: boolean }} io
    */
-  add(key, name, attrs, spec, { read, write, safety, throttle = false, feedback } = {}) {
+  add(
+    key,
+    name,
+    attrs,
+    spec,
+    { read, write, safety, temperature, throttle = false, meter = false, feedback } = {},
+  ) {
     if (this.features.some((f) => f.key === key)) {
       return;
     }
@@ -389,10 +412,18 @@ class DeviceMapper {
     }
     this.features.push(feature);
     if (read) {
-      this.readers.push({ key, attrs, read });
+      this.readers.push(meter ? { key, attrs, read, meter } : { key, attrs, read });
     }
     if (write) {
-      this.writers[key] = safety ? { write, safety } : { write };
+      const writer = { write };
+      if (safety) {
+        writer.safety = safety;
+      }
+      if (temperature) {
+        // A setpoint: the app checks the scale of the hub before sending.
+        writer.temperature = temperature;
+      }
+      this.writers[key] = writer;
     }
     if (throttle) {
       this.throttled.add(key);
@@ -411,8 +442,11 @@ class DeviceMapper {
 
   onoff() {
     const [category, type] = this.light ? [C.LIGHT, T.LIGHT.BINARY] : [C.SWITCH, T.SWITCH.BINARY];
-    // A valve driven as a switch stays read-only: closing or opening water is not a switch.
-    const writable = !this.valve && this.can('on') && this.can('off');
+    // The switch of a lock, a door, a valve, a siren or a keypad may unlock,
+    // open, cut the water or sound the alarm: it stays read-only, whatever
+    // the options ("turn everything off" must never reach them).
+    const sensitive = SENSITIVE_CAPABILITIES.some((c) => this.has(c));
+    const writable = !sensitive && this.can('on') && this.can('off');
     this.add(
       'switch',
       cut(this.name),
@@ -589,15 +623,37 @@ class DeviceMapper {
         }),
       },
     );
+    // The command: a cover state, like the garage "cover" of hacs-hubitat (no
+    // switch: "turn everything off" must not reach a garage door). OPEN 1,
+    // CLOSE -1, STOP 0 only with a stop command.
+    const stop = ['stop', 'stopPositionChange'].find(
+      (c) => this.r.commands.size > 0 && this.r.commands.has(c),
+    );
     this.add(
       'door_command',
       this.nameOf('door_command'),
       ['door'],
-      { category: C.SWITCH, type: T.SWITCH.BINARY, min: 0, max: 1 },
+      { category: C.SHUTTER, type: T.SHUTTER.STATE, min: -1, max: 1 },
       {
-        // 1 open (or opening), 0 closed (or closing).
-        read: this.enumRead('door', { open: 1, opening: 1, closed: 0, closing: 0 }),
-        write: (value) => [{ command: Number(value) > 0 ? 'open' : 'close', args: [] }],
+        read: this.enumRead('door', {
+          open: COVER_STATE.OPEN,
+          opening: COVER_STATE.OPEN,
+          closed: COVER_STATE.CLOSE,
+          closing: COVER_STATE.CLOSE,
+        }),
+        write: (value) => {
+          const v = Number(value);
+          if (v === COVER_STATE.OPEN) {
+            return [{ command: 'open', args: [] }];
+          }
+          if (v === COVER_STATE.CLOSE) {
+            return [{ command: 'close', args: [] }];
+          }
+          if (v === COVER_STATE.STOP && stop) {
+            return [{ command: stop, args: [] }];
+          }
+          throw Object.assign(new Error('unsupported'), { refusal: 'unsupported' });
+        },
         safety: 'garage',
       },
     );
@@ -639,6 +695,7 @@ class DeviceMapper {
               return [{ command, args: [fromCelsius(celsius, scale)] }];
             }
           : undefined,
+        temperature: attr,
       },
     );
   }
@@ -677,7 +734,7 @@ class DeviceMapper {
 
   // --- Sensors -----------------------------------------------------------------------
 
-  measure(attr, spec, read) {
+  measure(attr, spec, read, { meter = false } = {}) {
     this.add(attr, this.nameOf(attr), [attr], spec, {
       read:
         read ??
@@ -686,10 +743,32 @@ class DeviceMapper {
           if (v === undefined) {
             return null;
           }
-          return { state: spec.type === T.BATTERY.INTEGER ? clamp(Math.round(v), 0, 100) : v };
+          if (spec.type === T.BATTERY.INTEGER) {
+            return { state: clamp(Math.round(v), 0, 100) };
+          }
+          return { state: spec.type === T.UV_SENSOR.INTEGER ? Math.round(v) : v };
         }),
       throttle: true,
+      meter,
     });
+  }
+
+  /** The energy meter, in kWh (a driver reporting Wh is converted). */
+  energy(spec) {
+    this.measure(
+      'energy',
+      spec,
+      (r) => {
+        const v = numberAttr(r, 'energy');
+        if (v === undefined) {
+          return null;
+        }
+        const unit = r.attributes.get('energy')?.unit;
+        const wh = typeof unit === 'string' && /^\s*wh\s*$/i.test(unit);
+        return { state: wh ? round(v / 1000, 4) : v };
+      },
+      { meter: true },
+    );
   }
 
   binary(attr, { category, type, values }) {
@@ -788,7 +867,7 @@ class DeviceMapper {
       this.measure('power', hasSwitch ? POWER.switch : POWER.sensor);
     }
     if (this.has('EnergyMeter') && this.hasAttr('energy')) {
-      this.measure('energy', hasSwitch ? ENERGY.switch : ENERGY.sensor);
+      this.energy(hasSwitch ? ENERGY.switch : ENERGY.sensor);
     }
     for (const [attr, spec] of Object.entries(BINARIES)) {
       if (spec.caps.some((c) => this.has(c)) && this.hasAttr(attr)) {

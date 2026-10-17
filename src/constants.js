@@ -96,6 +96,16 @@ export const TIMINGS = {
   commandTimeoutMin: 300,
   /** Without live events, a device is read back this soon after a command. */
   commandEcho: 1500,
-  /** A lock or a garage door is read back this long after a command (slow motors). */
-  slowReadBack: 15_000,
+  /**
+   * After a lock or garage door command, the device is guarded: no other
+   * guarded command until it reports the state asked for, or this long.
+   */
+  guard: { lock: 20_000, garage: 60_000 },
+  /** The read backs of a guarded device (ms after the command; slow motors). */
+  guardReadBacks: { lock: [5000, 15_000], garage: [5000, 15_000, 30_000, 60_000] },
+  /** The event socket said nothing this long: it is opened again (watchdog). */
+  liveSilence: 30 * 60_000,
+  /** A refused socket is logged for its first failures, then once in this many. */
+  liveWarnFirst: 3,
+  liveWarnEvery: 10,
 };

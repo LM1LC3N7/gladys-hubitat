@@ -33,7 +33,7 @@ export const eventsocketUrl = (url) => `${url.replace(/^http/i, 'ws')}${EVENTSOC
  * Opens the event socket; resolves once it is open. Device events reach
  * `onEvent({ deviceId, name, value, unit })`; `onClose(reason)` is called
  * once when an open socket is lost (never after `close()`).
- * @param {{ url: string, WebSocket?: typeof WebSocket, timers?: object, timeout?: number, onEvent?: Function, onClose?: Function }} options
+ * @param {{ url: string, WebSocket?: typeof WebSocket, timers?: object, timeout?: number, onEvent?: Function, onMessage?: Function, onClose?: Function }} options
  * @returns {Promise<{ close(): void }>}
  */
 export function openEventSocket({
@@ -42,6 +42,7 @@ export function openEventSocket({
   timers = globalThis,
   timeout = TIMINGS.liveTimeout,
   onEvent = () => {},
+  onMessage = () => {},
   onClose = () => {},
 }) {
   return new Promise((resolve, reject) => {
@@ -108,6 +109,8 @@ export function openEventSocket({
       } catch {
         return;
       }
+      // Any message (location events included) proves the socket alive (watchdog).
+      onMessage();
       const event = deviceEventOf(json);
       if (event) {
         onEvent(event);

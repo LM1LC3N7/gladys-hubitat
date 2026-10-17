@@ -53,6 +53,12 @@ test/                             node --test, against the SDK's fake Gladys, a 
 - Locks and garage doors stay read-only unless the user turns on
   `allow_lock_control` / `allow_garage_door_control`; their commands run on a
   state read just before, never on the state in memory.
+- After a lock or garage door command the device is guarded until it reports
+  the state asked for (or 20 s / 60 s); never lift a guard on an unknown
+  state, nor on the start state without a move seen.
+- The switch of a lock, door, valve, siren or keypad is never writable.
+- A reconnection to Gladys (`connected`) must not clear a 429 pause, a refused
+  token's wait, nor the client (`app.resume`).
 - Commands are serialized per device and sent within 3.5 s or refused.
 - Never add a command of the HSM (alarm) or of the hub modes.
 - The access token travels in the query string: never log a Maker API URL.

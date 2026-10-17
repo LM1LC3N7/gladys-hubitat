@@ -24,9 +24,16 @@ the notes of the version's GitHub Release.
 - Commands through the Maker API: one at a time per device, sent within 3.5 s
   or refused.
 - Locks and garage doors read-only by default (two options to allow them),
-  commanded on a state read just before, refused when unknown or moving. No
-  HSM or mode command.
-- Temperatures in °C, converted from a Fahrenheit hub.
+  commanded on a state read just before, refused when unknown or moving, then
+  guarded until they report the state asked for (20 s / 60 s at most). The
+  garage door command is a shutter-like control, never a switch. The switch
+  of a lock, door, valve, siren or keypad stays read-only. No HSM or mode
+  command.
+- Temperatures in °C, converted from a Fahrenheit hub; setpoints only once the
+  hub's scale is confirmed and the current value plausible.
+- A watchdog that opens the event socket again when it misses a change or
+  stays silent for 30 minutes; reads merged with the events received meanwhile.
+- Energy index protected against a single drop; Wh converted to kWh.
 - Transport badges (hub unreachable, device offline, live events lost), a
   "Test the connection" button, English and French texts.
 

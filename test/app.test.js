@@ -123,7 +123,8 @@ test('live events reach Gladys at once; other devices are ignored; every press i
   box.emit('114', 'pushed', '2');
   box.emit('114', 'doubleTapped', 1);
   box.emit('114', 'held', 4);
-  box.emit('114', 'released', 4);
+  box.emit('114', 'released', 4); // the end of a long press
+  box.emit('114', 'released', 3); // a release alone
   box.emit('114', 'pushed', 9); // no such button
   await tick(TIMINGS.flushInterval);
   assert.deepEqual(
@@ -138,6 +139,11 @@ test('live events reach Gladys at once; other devices are ignored; every press i
   assert.deepEqual(
     statesOf(gladys, `${remote.external_id}:button_4`).map((s) => s.state),
     [3, 4],
+  );
+  assert.deepEqual(
+    statesOf(gladys, `${remote.external_id}:button_3`).map((s) => s.state),
+    [20],
+    'RELEASE, not the end of a long press',
   );
 
   // More buttons declared: the model again after the burst.
@@ -172,6 +178,7 @@ test('commands: one Maker API command each, with the live echo as feedback', asy
   assert.equal(ack.success, true, ack.error);
   ack = await gladys.fake.setValue(shade, featureOf(shade, 'windowShade'), 0);
   assert.equal(ack.success, true, ack.error);
+  box.emit('107', 'temperature', '20.6', { unit: '°C' }); // the scale of the hub, confirmed
   ack = await gladys.fake.setValue(thermostat, featureOf(thermostat, 'heatingSetpoint'), 21);
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(
@@ -281,8 +288,15 @@ test('garage doors: read-only by default, refused while moving, read back after'
   assert.equal(ack.success, true, ack.error);
   assert.deepEqual(box.executed, [{ id: '109', command: 'open', args: [] }]);
   const reads = box.callsOf('device').length;
-  await tick(TIMINGS.slowReadBack);
-  assert.equal(box.callsOf('device').length, reads + 1, 'read back after 15 s');
+  await tick(TIMINGS.guardReadBacks.garage[0]);
+  assert.equal(box.callsOf('device').length, reads + 1, 'read back after 5 s');
+  // A cover state: CLOSE is -1; STOP is refused, the opener has no stop command.
+  ack = await gladys.fake.setValue(garage, command, 0);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /ne propose pas cette commande/);
+  ack = await gladys.fake.setValue(garage, command, -1);
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(box.executed.at(-1), { id: '109', command: 'close', args: [] });
 });
 
 test('a command not sent within 3.5 s is refused, never sent late', async (t) => {
@@ -444,4 +458,196 @@ test('the Scan button reads the hub again; a deleted device is forgotten', async
   assert.ok(deviceNamed(gladys, 'Nouvelle prise (Bureau)'));
   await gladys.fake.deviceDeleted(lamp);
   assert.ok(!app.created.has(`${lamp.external_id}:switch`));
+});
+
+test('S1: a lock reporting late: [unlock, lock] -> the second waits for the first, never "already in place"', async (t) => {
+  const { gladys, box, tick, app } = await setup(
+    t,
+    { ...CONFIG, allow_lock_control: true },
+    (hub) => {
+      hub.slow = { lock: 3000, door: 5000 };
+    },
+  );
+  const door = await created(gladys, "Porte d'entrée (Entrée)");
+  const lock = featureOf(door, 'lock');
+  let ack = await gladys.fake.setValue(door, lock, 0);
+  assert.equal(ack.success, true, ack.error);
+  // The hub still says "locked": refused as busy, not taken as already in place.
+  ack = await gladys.fake.setValue(door, lock, 1);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /déjà en cours/);
+  // An unknown state never lifts the guard.
+  box.emit('108', 'lock', 'unknown');
+  await tick(1000);
+  ack = await gladys.fake.setValue(door, lock, 1);
+  assert.match(ack.error, /déjà en cours/);
+  assert.deepEqual(
+    box.executed.map((e) => e.command),
+    ['unlock'],
+  );
+  // The hub reports "unlocked" at 3 s: the guard is lifted.
+  await tick(2000);
+  assert.equal(app.guards.has('108'), false);
+  ack = await gladys.fake.setValue(door, lock, 1);
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(
+    box.executed.map((e) => e.command),
+    ['unlock', 'lock'],
+  );
+});
+
+test('S2: a garage door: [open, close] -> close refused while opening, taken once open', async (t) => {
+  const { gladys, box, tick, app } = await setup(
+    t,
+    { ...CONFIG, allow_garage_door_control: true },
+    (hub) => {
+      hub.slow = { lock: 3000, door: 5000 };
+    },
+  );
+  const garage = await created(gladys, 'Garage (Garage)');
+  const command = featureOf(garage, 'door_command');
+  let ack = await gladys.fake.setValue(garage, command, 1);
+  assert.equal(ack.success, true, ack.error);
+  ack = await gladys.fake.setValue(garage, command, -1);
+  assert.match(ack.error, /déjà en cours/);
+  await tick(1000); // "opening"
+  assert.equal(app.guards.get('109').sawMoving, true);
+  ack = await gladys.fake.setValue(garage, command, -1);
+  assert.match(ack.error, /déjà en cours/);
+  await tick(4000); // "open"
+  assert.equal(app.guards.has('109'), false);
+  ack = await gladys.fake.setValue(garage, command, -1);
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(
+    box.executed.map((e) => e.command),
+    ['open', 'close'],
+  );
+});
+
+test('a guard never confirmed expires; failed read backs mark the state unconfirmed', async (t) => {
+  const { gladys, box, tick, app } = await setup(
+    t,
+    { ...CONFIG, allow_lock_control: true },
+    (hub) => {
+      hub.slow = { lock: 60_000, door: 60_000 }; // never in time
+    },
+  );
+  const door = await created(gladys, "Porte d'entrée (Entrée)");
+  const lock = featureOf(door, 'lock');
+  assert.equal((await gladys.fake.setValue(door, lock, 0)).success, true);
+  box.failOn.device = new HubitatError('timeout', 'no answer within 15 s');
+  await tick(TIMINGS.guardReadBacks.lock[0]);
+  let badge = lastTransport(gladys, door);
+  assert.equal(badge.degraded, true);
+  assert.equal(badge.message.fr, T.badge.unconfirmed.fr);
+  delete box.failOn.device;
+  await tick(TIMINGS.guardReadBacks.lock[1] - TIMINGS.guardReadBacks.lock[0]); // read back OK
+  await tick(TIMINGS.guard.lock - TIMINGS.guardReadBacks.lock[1]);
+  assert.equal(app.guards.has('108'), false, 'expired');
+  assert.equal(lastTransport(gladys, door).message.fr, T.badge.unconfirmed.fr);
+  // The next full read shows a state: the badge is clear again.
+  await tick(TIMINGS.resync);
+  badge = lastTransport(gladys, door);
+  assert.equal(badge.degraded, undefined);
+});
+
+test('a read keeps the values of the events that came during it, and the units seen', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const lamp = await created(gladys, 'Plafonnier (Salon)');
+  const motion = await created(gladys, 'Détecteur couloir (Couloir)');
+  box.emit('111', 'temperature', 77, { unit: '°F' });
+  const client = box.clients.at(-1);
+  const devicesAll = client.devicesAll;
+  client.devicesAll = async (options) => {
+    const answer = await devicesAll(options); // the snapshot says "on"
+    box.emit('101', 'switch', 'off'); // an event while the answer travels
+    return answer;
+  };
+  box.device('101').attributes.switch = 'on';
+  await tick(TIMINGS.resync);
+  await tick(TIMINGS.flushInterval);
+  assert.equal(gladys.fake.lastState(`${lamp.external_id}:switch`), 0, 'the event wins');
+  await tick(10_000);
+  assert.equal(
+    gladys.fake.lastState(`${motion.external_id}:temperature`),
+    25,
+    'the °F of the event is kept: 77 is not read as °C',
+  );
+});
+
+test('temperature scale: setpoints only on a confirmed scale and a plausible value', async (t) => {
+  const { gladys, box, app } = await setup(t);
+  const thermostat = await created(gladys, 'Thermostat (Entrée)');
+  const setpoint = featureOf(thermostat, 'heatingSetpoint');
+  let ack = await gladys.fake.setValue(thermostat, setpoint, 21);
+  assert.equal(ack.success, false, 'no unit seen yet');
+  assert.match(ack.error, /échelle de température du hub n'est pas confirmée/);
+  // The hub says °F, the option °C: told in the status and the logs, refused.
+  box.emit('111', 'temperature', 70, { unit: '°F' });
+  await settle();
+  assert.equal(app.scaleMismatch, true);
+  assert.match(gladys.fake.connectionStatus.message.en, /reports temperatures in °F/);
+  ack = await gladys.fake.setValue(thermostat, setpoint, 21);
+  assert.match(ack.error, /pas confirmée/);
+  // °C confirmed, but a current setpoint of 68 is no °C value.
+  box.emit('111', 'temperature', 21, { unit: '°C' });
+  box.emit('107', 'heatingSetpoint', 68);
+  ack = await gladys.fake.setValue(thermostat, setpoint, 21);
+  assert.match(ack.error, /pas confirmée/);
+  box.emit('107', 'heatingSetpoint', 19);
+  ack = await gladys.fake.setValue(thermostat, setpoint, 21);
+  assert.equal(ack.success, true, ack.error);
+  assert.equal(app.scaleMismatch, false);
+});
+
+test('watchdog: a change no event told, or a silent socket, opens the socket again', async (t) => {
+  const { app, box, tick } = await setup(t);
+  assert.equal(box.callsOf('live').length, 1);
+  box.silently('111', 'motion', 'active');
+  await tick(TIMINGS.resync);
+  assert.equal(app.liveState, 'down', 'the missed event is seen');
+  await tick(TIMINGS.liveRetryMin);
+  assert.equal(app.liveState, 'live');
+  assert.equal(box.callsOf('live').length, 2);
+  // No message at all for more than 30 minutes.
+  for (let i = 0; i < 7; i += 1) {
+    await tick(TIMINGS.resync);
+  }
+  await tick(TIMINGS.liveRetryMin);
+  assert.ok(box.callsOf('live').length >= 3);
+});
+
+test('an energy index that drops once is held; twice, it is a reset', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  assert.equal(gladys.fake.lastState(energy), 312.4);
+  box.emit('104', 'energy', 3.1); // a glitch
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 312.4);
+  box.emit('104', 'energy', 312.9);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 312.9);
+  box.emit('104', 'energy', 0.2); // reset by the user
+  box.emit('104', 'energy', 0.3);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 0.3);
+});
+
+test('a 429 pause covers the scan, the test button and a reconnection to Gladys', async (t) => {
+  const { gladys, app, box, tick } = await setup(t);
+  box.fail = new HubitatError('rate', 'too many requests (HTTP 429)', { retryAfter: 120_000 });
+  await tick(TIMINGS.resync);
+  assert.equal(app.online, false);
+  box.fail = undefined;
+  const calls = box.calls.length;
+  await gladys.fake.scanRequest();
+  const tested = await gladys.fake.action(ACTIONS.TEST, {});
+  assert.equal(tested.data.message.en, T.failure({ kind: 'rate' }).en);
+  await app.resume(CONFIG); // Gladys reconnected: the pause is kept
+  await settle();
+  assert.equal(box.calls.length, calls, 'no request to the hub during the pause');
+  await tick(120_000);
+  assert.equal(app.online, true);
 });

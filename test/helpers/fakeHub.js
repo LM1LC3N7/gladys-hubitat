@@ -78,6 +78,12 @@ export function fakeHub({ token = TOKEN } = {}) {
     clients: [],
     /** whether a command echoes as live events */
     echo: true,
+    /**
+     * Delayed reports of locks and garage doors (ms), like real motors: the
+     * lock reports after `lock`; the door reports opening/closing after 1 s,
+     * then its final state after `door`. Undefined: at once.
+     */
+    slow: undefined,
   };
 
   box.device = (id) => box.devices.find((d) => d.id === String(id));
@@ -91,8 +97,14 @@ export function fakeHub({ token = TOKEN } = {}) {
       device.attributes[name] = value;
     }
     for (const session of box.sessions.filter((s) => !s.closed)) {
+      session.options.onMessage?.();
       session.options.onEvent?.({ deviceId: String(id), name, value, unit, source });
     }
+  };
+
+  /** An attribute changes on the hub and no event tells it (a lost event). */
+  box.silently = (id, name, value) => {
+    box.device(id).attributes[name] = value;
   };
 
   /** The hub drops the event socket. */
@@ -171,11 +183,21 @@ export function fakeHub({ token = TOKEN } = {}) {
             throw new HubitatError('notfound', 'not found (HTTP 404)', { status: 404 });
           }
           box.executed.push({ id: String(id), command, args });
-          for (const [name, value] of Object.entries(changes)) {
+          const report = (name, value) => {
             if (box.echo) {
               box.emit(id, name, value);
             } else {
               device.attributes[name] = value;
+            }
+          };
+          if (box.slow && 'lock' in changes) {
+            setTimeout(() => report('lock', changes.lock), box.slow.lock);
+          } else if (box.slow && 'door' in changes) {
+            setTimeout(() => report('door', command === 'open' ? 'opening' : 'closing'), 1000);
+            setTimeout(() => report('door', changes.door), box.slow.door);
+          } else {
+            for (const [name, value] of Object.entries(changes)) {
+              report(name, value);
             }
           }
           return structuredClone(details(device));

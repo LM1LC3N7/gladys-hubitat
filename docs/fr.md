@@ -35,8 +35,10 @@ Chaque appareil du hub donne **un appareil Gladys**, nommé d'après son libell�
 et sa pièce (« Plafonnier (Salon) ») ; son identifiant sur le hub, sa pièce et
 son driver sont gardés dans ses paramètres. Les appareils sans aucune de ces
 capabilities (enceintes, pour l'instant) sont écartés. Les vannes d'eau ne sont
-pas pilotées (une vanne présentée comme un interrupteur est affichée en lecture
-seule).
+pas pilotées. L'interrupteur d'un appareil qui est aussi une serrure, une porte
+de garage, une vanne, une sirène ou un clavier d'alarme est affiché en lecture
+seule, quelles que soient les options : une scène « tout éteindre » ne
+l'atteint jamais.
 
 ## Prérequis
 
@@ -68,7 +70,12 @@ seule).
 
 - **Échelle de température du hub** : l'échelle réglée dans Hubitat (Settings →
   Location and modes). Gladys affiche toujours des °C et convertit ; quand le
-  hub donne l'unité d'une mesure, c'est elle qui compte.
+  hub donne l'unité d'une mesure, c'est elle qui compte, et elle est gardée
+  pour les lectures suivantes. Quand les unités du hub contredisent l'option,
+  l'état de connexion le signale. Une consigne de thermostat n'est envoyée
+  qu'une fois l'échelle confirmée par le hub (l'unité d'un événement en
+  direct) et la consigne actuelle vraisemblable dans cette échelle (pas plus
+  de 45 en °C) : sans événements en direct, les consignes sont refusées.
 - **Événements en direct** (activés par défaut) : l'intégration écoute le socket
   d'événements du hub (`ws://<hub>/eventsocket`). Les changements arrivent dans
   Gladys en une seconde, et les appuis sur les boutons arrivent à vos scènes.
@@ -94,12 +101,21 @@ seule).
   s'affiche, mais toute commande est refusée tant que l'option correspondante
   n'est pas activée. Une fois activée, Gladys peut **déverrouiller** votre
   porte et **ouvrir** votre garage, depuis le tableau de bord, vos scènes et
-  les assistants vocaux : la commande de la porte de garage est un
-  interrupteur, donc une scène « tout éteindre » la ferme.
+  les assistants vocaux. La commande de la porte de garage fonctionne comme un
+  volet (ouvrir 1, fermer -1 ; arrêt seulement si l'ouvre-porte a une commande
+  d'arrêt) : une scène qui agit sur tous les volets l'atteint aussi.
 - Avant une commande de serrure ou de porte de garage, l'intégration **relit
   l'appareil** sur le hub, et refuse si son état est inconnu ou en mouvement
   (ouverture, fermeture en cours) ; rien n'est envoyé s'il est déjà dans
-  l'état voulu. Elle relit l'appareil 15 secondes plus tard.
+  l'état voulu.
+- Après la commande, l'appareil est **sous garde** : toute autre commande de
+  serrure ou de porte de garage sur lui est refusée (« une commande est déjà
+  en cours ») jusqu'à ce qu'il signale l'état demandé, ou pendant 20 secondes
+  (serrure) / 60 secondes (porte de garage). Un rapport tardif de l'ancien
+  état ou un état inconnu ne lève jamais la garde. L'appareil est relu après
+  5 et 15 secondes (et 30 et 60 pour une porte de garage) ; si ces lectures
+  échouent, ou si l'état n'arrive jamais, son badge indique « état non
+  confirmé ».
 - Les commandes d'un même appareil partent **une par une**. Gladys attend une
   réponse 5 secondes : une commande qui n'a pas pu partir en 3,5 secondes est
   refusée, jamais envoyée en retard.
@@ -112,8 +128,16 @@ seule).
   Maker API, qui les pilote. Gardez le hub allumé.
 - **Boutons** : chaque numéro de bouton est une fonctionnalité (`Bouton 1`,
   `Bouton 2`…). Un appui est un clic, un double appui un double clic, un appui
-  maintenu un appui long, le relâchement sa fin. Les appuis n'arrivent que par
+  maintenu un appui long, le relâchement sa fin (un relâchement sans appui
+  maintenu avant est un simple « relâché »). Les appuis n'arrivent que par
   les événements en direct : sans eux, les boutons restent muets.
+- **Chien de garde des événements en direct** : quand une lecture complète
+  trouve un changement d'un état à deux valeurs (interrupteur, contact,
+  mouvement, serrure, porte…) qu'aucun événement n'a annoncé, ou quand le
+  socket est resté muet 30 minutes, il est rouvert (point orange en attendant).
+- **Énergie** : l'index d'énergie ne fait que monter ; une baisse isolée (un
+  raté) est retenue jusqu'à la mesure suivante, deux de suite sont acceptées
+  (compteur remis à zéro). Un driver qui donne des Wh est converti en kWh.
 - **Le socket d'événements transporte les événements de tous les appareils du
   hub**, pas seulement de ceux que vous avez autorisés : l'intégration garde
   les autorisés et ignore les autres. Il ne demande pas de jeton.

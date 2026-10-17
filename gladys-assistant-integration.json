@@ -169,8 +169,8 @@
         "fr": "Autoriser le pilotage des portes de garage depuis Gladys"
       },
       "description": {
-        "en": "Off by default: garage doors are read-only. On, Gladys can open and close them; the command is a switch, reachable by \"turn everything off\" scenes and voice assistants.",
-        "fr": "Désactivé par défaut : les portes de garage sont en lecture seule. Activé, Gladys peut les ouvrir et les fermer ; la commande est un interrupteur, atteint par les scènes « tout éteindre » et les assistants vocaux."
+        "en": "Off by default: garage doors are read-only. On, Gladys can open and close them, from the dashboard, scenes and voice assistants; the command works like a shutter (open, close).",
+        "fr": "Désactivé par défaut : les portes de garage sont en lecture seule. Activé, Gladys peut les ouvrir et les fermer, depuis le tableau de bord, les scènes et les assistants vocaux ; la commande fonctionne comme un volet (ouvrir, fermer)."
       },
       "required": false,
       "default": false
@@ -180,7 +180,7 @@
     {
       "key": "test_connection",
       "label": { "en": "Test the connection", "fr": "Tester la connexion" },
-      "timeout_seconds": 60
+      "timeout_seconds": 90
     }
   ]
 }

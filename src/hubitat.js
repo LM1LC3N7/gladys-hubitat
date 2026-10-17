@@ -62,9 +62,10 @@ export function networkError(err) {
 /**
  * One HTTP GET; resolves { status, headers, body }.
  * @param {string} url
- * @param {{ timeout: number, agent?: http.Agent, maxBytes?: number }} options
+ * @param {{ timeout: number, agent?: http.Agent, maxBytes?: number, guard?: Function }} options
+ *   `guard` throws to cancel the request at the moment it would leave
  */
-export function httpGet(url, { timeout, agent, maxBytes = LIMITS.responseBytes }) {
+export function httpGet(url, { timeout, agent, maxBytes = LIMITS.responseBytes, guard }) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const lib = target.protocol === 'https:' ? https : http;
@@ -110,7 +111,29 @@ export function httpGet(url, { timeout, agent, maxBytes = LIMITS.responseBytes }
       req.destroy();
     }, timeout);
     req.on('error', (err) => settle(reject, networkError(err)));
-    req.end();
+    if (!guard) {
+      req.end();
+      return;
+    }
+    // A command: the deadline is checked when the request really leaves (its
+    // socket connected), not when it was queued behind another one.
+    const send = () => {
+      try {
+        guard();
+      } catch (err) {
+        settle(reject, err);
+        req.destroy();
+        return;
+      }
+      req.end();
+    };
+    req.once('socket', (socket) => {
+      if (socket.connecting) {
+        socket.once('connect', send);
+      } else {
+        send();
+      }
+    });
   });
 }
 
@@ -195,18 +218,20 @@ export function parseAnswer({ status, headers = {}, body }) {
  * @param {{ url: string, appId: string, token: string, request?: typeof httpGet }} options
  */
 export function createClient({ url, appId, token, request = httpGet }) {
-  const agent = new (url.startsWith('https:') ? https : http).Agent({
-    keepAlive: true,
-    maxSockets: 4,
-  });
+  const Agent = (url.startsWith('https:') ? https : http).Agent;
+  // The reads (a big /devices/all) never hold up a command: commands get their own agent.
+  const agent = new Agent({ keepAlive: true, maxSockets: 4 });
+  const commandAgent = new Agent({ keepAlive: true, maxSockets: 2 });
   const base = `${url}${API.base(appId)}`;
-  const send = async (path, { timeout = TIMINGS.requestTimeout, guard } = {}) => {
+  const send = async (path, { timeout = TIMINGS.requestTimeout, guard } = {}, via = agent) => {
     const ms = typeof timeout === 'function' ? timeout() : timeout;
-    // A command must not leave once its deadline is past (guard throws).
+    // A command must not leave once its deadline is past (guard throws), checked
+    // now and again when the request really leaves.
     guard?.();
     const answer = await request(`${base}${path}?access_token=${encodeURIComponent(token)}`, {
-      agent,
+      agent: via,
       timeout: ms,
+      guard,
     });
     return parseAnswer(answer);
   };
@@ -228,10 +253,11 @@ export function createClient({ url, appId, token, request = httpGet }) {
     },
     /** One command of one device, with its secondary values. */
     command(id, command, args = [], options) {
-      return send(API.command(id, command, args), options);
+      return send(API.command(id, command, args), options, commandAgent);
     },
     close() {
       agent.destroy();
+      commandAgent.destroy();
     },
   };
 }

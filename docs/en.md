@@ -34,8 +34,10 @@ affiliated with Hubitat.
 Each hub device makes **one Gladys device**, named after its label and room
 ("Ceiling light (Living room)"); its hub id, room and driver are kept in its
 parameters. Devices with none of these capabilities (speakers, for now) are
-left out. Water valves are not controlled (a valve driven as a switch is shown
-read-only).
+left out. Water valves are not controlled. The switch of a device that is also
+a lock, a garage door, a valve, a siren or a security keypad is shown
+read-only, whatever the options: a "turn everything off" scene never reaches
+it.
 
 ## Requirements
 
@@ -65,7 +67,11 @@ read-only).
 
 - **Temperature scale of the hub**: the scale set in Hubitat (Settings →
   Location and modes). Gladys always shows °C and converts; when the hub gives
-  the unit of a reading, the unit wins.
+  the unit of a reading, the unit wins, and is kept for the next reads. When
+  the hub's units disagree with the option, the connection status says so. A
+  thermostat setpoint is sent only once the scale is confirmed by the hub (the
+  unit of a live event) and the current setpoint is plausible in it (not above
+  45 in °C): without live events, setpoints are refused.
 - **Live events** (on by default): the integration listens to the event socket
   of the hub (`ws://<hub>/eventsocket`). The changes reach Gladys within a
   second, and the button presses reach your scenes. Off, or when the socket is
@@ -86,12 +92,19 @@ read-only).
 - **Locks and garage doors are read-only by default.** Their state shows up,
   but every command is refused until you turn on the matching option. Once on,
   Gladys can **unlock** your door and **open** your garage, from the dashboard,
-  your scenes and the voice assistants: the garage door command is a switch,
-  so a "turn everything off" scene closes it.
+  your scenes and the voice assistants. The garage door command works like a
+  shutter (open 1, close -1; stop only when the opener has a stop command):
+  a scene acting on every shutter reaches it too.
 - Before a lock or garage door command, the integration **reads the device
   again** on the hub, and refuses when its state is unknown or moving
-  (opening, closing); nothing is sent when it is already in place. It reads
-  the device again 15 seconds later.
+  (opening, closing); nothing is sent when it is already in place.
+- After the command, the device is **guarded**: any other lock or garage door
+  command on it is refused ("a command is already in progress") until it
+  reports the state asked for, or for 20 seconds (lock) / 60 seconds (garage
+  door). A late report of the old state or an unknown state never lifts the
+  guard. The device is read again after 5 and 15 seconds (and 30 and 60 for a
+  garage door); when these reads fail, or the state never comes, its badge
+  says "state not confirmed".
 - The commands of one device are sent **one at a time**. Gladys waits 5
   seconds for an answer: a command that could not leave within 3.5 seconds
   is refused, never sent late.
@@ -104,8 +117,14 @@ read-only).
   Maker API, which drives them. Keep the hub running.
 - **Buttons**: each button number is a feature (`Button 1`, `Button 2`…).
   Pushed is a click, double tapped a double click, held a long press, released
-  its end. The presses only arrive through the live events: with them off,
-  the buttons stay silent.
+  its end (a release without a hold before is a plain "release"). The presses
+  only arrive through the live events: with them off, the buttons stay silent.
+- **Live events watchdog**: when a full read finds a two-state change (switch,
+  contact, motion, lock, door…) that no event told, or when the socket said
+  nothing for 30 minutes, the socket is opened again (orange dot meanwhile).
+- **Energy**: the energy index only goes up; a single drop (a glitch) is held
+  until the next reading, two in a row are taken (the meter was reset). A
+  driver reporting Wh is converted to kWh.
 - **The event socket carries the events of every device of the hub**, not
   only those you authorized: the integration keeps the authorized ones and
   drops the rest. It needs no token.
