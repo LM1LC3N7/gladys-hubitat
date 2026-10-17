@@ -31,18 +31,31 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
-src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+index.js                          SDK wiring only (src/handlers.js registers before connect())
+src/app.js                        HubitatApp: lifecycle, reads, live events, commands, badges
+src/hubitat.js                    Maker API client (HTTP GET, token in the query, errors by kind)
+src/eventsocket.js                ws://<hub>/eventsocket, the live events
+src/records.js                    hub answers and events -> records (pure)
+src/mapping.js                    one record -> features, readers, writers (pure)
+src/devices.js                    records -> Gladys devices + routing tables (pure)
+src/publisher.js                  states within 300/min, sensor throttling, button presses
+src/config.js                     DEFAULTS (mirrors the manifest defaults) + normalization
+src/i18n.js                       texts in English and French
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, against the SDK's fake Gladys, a fake hub and a
+                                  simulated hub on 127.0.0.1 (never the network)
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
+
+## Safety rules of this integration
+
+- Locks and garage doors stay read-only unless the user turns on
+  `allow_lock_control` / `allow_garage_door_control`; their commands run on a
+  state read just before, never on the state in memory.
+- Commands are serialized per device and sent within 3.5 s or refused.
+- Never add a command of the HSM (alarm) or of the hub modes.
+- The access token travels in the query string: never log a Maker API URL.
 
 ## Rules
 

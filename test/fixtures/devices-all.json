@@ -1,0 +1,275 @@
+[
+  {
+    "name": "Generic Zigbee Dimmer",
+    "label": "Plafonnier",
+    "type": "Generic Zigbee Dimmer",
+    "id": "101",
+    "room": "Salon",
+    "capabilities": [
+      "Switch",
+      "SwitchLevel",
+      "ChangeLevel",
+      "Refresh",
+      "Configuration",
+      "Actuator"
+    ],
+    "attributes": { "switch": "on", "level": "60" },
+    "commands": ["on", "off", "setLevel", "startLevelChange", "stopLevelChange", "refresh"]
+  },
+  {
+    "name": "Advanced Zigbee RGBW Bulb",
+    "label": "Lampe couleur",
+    "type": "Advanced Zigbee RGBW Bulb",
+    "id": "102",
+    "room": "Salon",
+    "capabilities": [
+      "Switch",
+      "SwitchLevel",
+      "ColorControl",
+      "ColorTemperature",
+      "ColorMode",
+      "Light",
+      "Actuator"
+    ],
+    "attributes": {
+      "switch": "on",
+      "level": 80,
+      "hue": 66.67,
+      "saturation": 100,
+      "colorTemperature": 2700,
+      "colorMode": "RGB",
+      "colorName": "Blue"
+    },
+    "commands": [
+      { "command": "on" },
+      { "command": "off" },
+      { "command": "setLevel" },
+      { "command": "setColor" },
+      { "command": "setHue" },
+      { "command": "setSaturation" },
+      { "command": "setColorTemperature" }
+    ]
+  },
+  {
+    "name": "Generic Zigbee CT Bulb",
+    "label": "Lampe chevet",
+    "type": "Generic Zigbee CT Bulb",
+    "id": "103",
+    "room": "Chambre",
+    "capabilities": ["Switch", "SwitchLevel", "ColorTemperature", "ColorMode", "Bulb"],
+    "attributes": { "switch": "off", "level": 40, "colorTemperature": 4000, "colorMode": "CT" },
+    "commands": ["on", "off", "setLevel", "setColorTemperature"]
+  },
+  {
+    "name": "Generic Zigbee Outlet",
+    "label": "Prise lave-linge",
+    "type": "Generic Zigbee Outlet",
+    "id": "104",
+    "room": "Buanderie",
+    "capabilities": [
+      "Switch",
+      "Outlet",
+      "PowerMeter",
+      "EnergyMeter",
+      "VoltageMeasurement",
+      "CurrentMeter"
+    ],
+    "attributes": {
+      "switch": "on",
+      "power": "1520.5",
+      "energy": "312.4",
+      "voltage": 231,
+      "amperage": 6.6
+    },
+    "commands": ["on", "off", "refresh", "resetEnergy"]
+  },
+  {
+    "name": "Generic Z-Wave Switch",
+    "label": "Ventilation",
+    "type": "Generic Z-Wave Switch",
+    "id": "105",
+    "room": "",
+    "capabilities": ["Switch", "Actuator"],
+    "attributes": { "switch": "off" },
+    "commands": ["on", "off"]
+  },
+  {
+    "name": "Zemismart Zigbee Blind",
+    "label": "Volet salon",
+    "type": "Zemismart Zigbee Blind",
+    "id": "106",
+    "room": "Salon",
+    "capabilities": ["WindowShade", "SwitchLevel", "Battery", "Actuator"],
+    "attributes": { "windowShade": "partially open", "position": 35, "level": 35, "battery": 88 },
+    "commands": [
+      "open",
+      "close",
+      "setPosition",
+      "startPositionChange",
+      "stopPositionChange",
+      "setLevel"
+    ]
+  },
+  {
+    "name": "Generic Z-Wave Thermostat",
+    "label": "Thermostat",
+    "type": "Generic Z-Wave Thermostat",
+    "id": "107",
+    "room": "Entrée",
+    "capabilities": [
+      "Thermostat",
+      "ThermostatHeatingSetpoint",
+      "ThermostatCoolingSetpoint",
+      "ThermostatMode",
+      "ThermostatOperatingState",
+      "TemperatureMeasurement",
+      "RelativeHumidityMeasurement"
+    ],
+    "attributes": {
+      "temperature": "20.6",
+      "heatingSetpoint": "19.5",
+      "coolingSetpoint": "26",
+      "thermostatMode": "heat",
+      "thermostatOperatingState": "heating",
+      "supportedThermostatModes": "[\"off\", \"heat\", \"cool\", \"auto\"]",
+      "humidity": 45
+    },
+    "commands": [
+      "setHeatingSetpoint",
+      "setCoolingSetpoint",
+      "setThermostatMode",
+      "heat",
+      "cool",
+      "off",
+      "auto"
+    ]
+  },
+  {
+    "name": "Generic Z-Wave Lock",
+    "label": "Porte d'entrée",
+    "type": "Generic Z-Wave Lock",
+    "id": "108",
+    "room": "Entrée",
+    "capabilities": ["Lock", "LockCodes", "Battery"],
+    "attributes": { "lock": "locked", "battery": 71, "lockCodes": "{}", "codeLength": 4 },
+    "commands": ["lock", "unlock", "setCode", "deleteCode", "getCodes"]
+  },
+  {
+    "name": "Generic Z-Wave Garage Door Opener",
+    "label": "Garage",
+    "type": "Generic Z-Wave Garage Door Opener",
+    "id": "109",
+    "room": "Garage",
+    "capabilities": ["GarageDoorControl", "ContactSensor", "Actuator"],
+    "attributes": { "door": "closed", "contact": "closed" },
+    "commands": ["open", "close"]
+  },
+  {
+    "name": "Generic Zigbee Contact Sensor",
+    "label": "Fenêtre cuisine",
+    "type": "Generic Zigbee Contact Sensor",
+    "id": "110",
+    "room": "Cuisine",
+    "capabilities": ["ContactSensor", "Battery", "TemperatureMeasurement", "Sensor"],
+    "attributes": { "contact": "open", "battery": 95, "temperature": 18.2 },
+    "commands": ["configure", "refresh"]
+  },
+  {
+    "name": "Generic Zigbee Motion Sensor",
+    "label": "Détecteur couloir",
+    "type": "Generic Zigbee Motion Sensor",
+    "id": "111",
+    "room": "Couloir",
+    "capabilities": [
+      "MotionSensor",
+      "IlluminanceMeasurement",
+      "TemperatureMeasurement",
+      "Battery",
+      "TamperAlert"
+    ],
+    "attributes": {
+      "motion": "inactive",
+      "illuminance": 120,
+      "temperature": 21.3,
+      "battery": 100,
+      "tamper": "clear"
+    },
+    "commands": ["refresh"]
+  },
+  {
+    "name": "Generic Zigbee Moisture Sensor",
+    "label": "Fuite chaudière",
+    "type": "Generic Zigbee Moisture Sensor",
+    "id": "112",
+    "room": "Buanderie",
+    "capabilities": ["WaterSensor", "Battery"],
+    "attributes": { "water": "dry", "battery": 66 },
+    "commands": []
+  },
+  {
+    "name": "Generic Z-Wave Smoke Detector",
+    "label": "Détecteur fumée",
+    "type": "Generic Z-Wave Smoke Detector",
+    "id": "113",
+    "room": "Couloir",
+    "capabilities": ["SmokeDetector", "CarbonMonoxideDetector", "Battery"],
+    "attributes": { "smoke": "clear", "carbonMonoxide": "clear", "battery": 90 },
+    "commands": []
+  },
+  {
+    "name": "Sonoff Zigbee Button Controller",
+    "label": "Télécommande",
+    "type": "Sonoff Zigbee Button Controller",
+    "id": "114",
+    "room": "Salon",
+    "capabilities": [
+      "PushableButton",
+      "HoldableButton",
+      "DoubleTapableButton",
+      "ReleasableButton",
+      "Battery"
+    ],
+    "attributes": { "numberOfButtons": 4, "pushed": 1, "battery": 80 },
+    "commands": ["push", "hold", "doubleTap", "release"]
+  },
+  {
+    "name": "Generic Zigbee Temperature/Humidity Sensor",
+    "label": "Capteur chambre",
+    "type": "Generic Zigbee Temperature/Humidity Sensor",
+    "id": "115",
+    "room": "Chambre",
+    "capabilities": [
+      "TemperatureMeasurement",
+      "RelativeHumidityMeasurement",
+      "Battery",
+      "HealthCheck"
+    ],
+    "attributes": {
+      "temperature": 19.4,
+      "humidity": 52.5,
+      "battery": 33,
+      "healthStatus": "offline"
+    },
+    "commands": []
+  },
+  {
+    "name": "Zigbee Water Valve",
+    "label": "Vanne arrivée d'eau",
+    "type": "Zigbee Water Valve",
+    "id": "116",
+    "room": "Buanderie",
+    "capabilities": ["Valve", "Switch"],
+    "attributes": { "valve": "open", "switch": "on" },
+    "commands": ["open", "close", "on", "off"]
+  },
+  {
+    "name": "Sonos Player",
+    "label": "Enceinte",
+    "type": "Sonos Player",
+    "id": "117",
+    "room": "Salon",
+    "capabilities": ["MusicPlayer", "AudioVolume"],
+    "attributes": { "status": "stopped", "volume": 20 },
+    "commands": ["play", "pause", "setVolume"]
+  }
+]

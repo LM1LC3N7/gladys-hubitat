@@ -1,61 +1,138 @@
-# Demo Devices Template
+# Hubitat Elevation
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+This integration connects Gladys to **your Hubitat Elevation hub** through its
+**Maker API** app, and offers the devices you authorize there in the
+**Discovery** tab of Gladys: switches, dimmers, colour and white bulbs, plugs
+with their consumption, shades, thermostats, locks, garage doors, buttons and
+sensors. Once a device is added, its state follows the hub **live**, and Gladys
+controls it **through the hub**, which keeps its Z-Wave, Zigbee, Matter and
+LAN devices. Everything stays on your local network. Unofficial, not
+affiliated with Hubitat.
+
+> **Development version (0.1).** Written from the Maker API documentation and
+> the Home Assistant integration of the same API, and tested against a
+> simulated hub: it has never been tested on a real Hubitat hub yet. Your
+> feedback is welcome on the GitHub repository.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+| Hubitat capability                                                  | In Gladys                                                      |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `Switch`, `SwitchLevel`                                             | a light (bulbs, dimmers), else a switch (outlets, relays)      |
+| `ColorControl`, `ColorTemperature` (`colorMode`)                    | colour (RGB) and colour temperature, the one the bulb shows    |
+| `PowerMeter`, `EnergyMeter`, `VoltageMeasurement`, `CurrentMeter`   | power, energy (meter), voltage and current                     |
+| `WindowShade`, `WindowBlind`                                        | a shutter: open, close, stop, position                         |
+| `Thermostat` (heating and cooling setpoints, mode, operating state) | a thermostat, setpoints in °C                                  |
+| `Lock`                                                              | a lock, **read-only unless you allow it**                      |
+| `GarageDoorControl`, `DoorControl`                                  | a door sensor, and a command **read-only unless you allow it** |
+| `PushableButton`, `HoldableButton`, `DoubleTapableButton`…          | one button per number: pushed, double tapped, held, released   |
+| `ContactSensor`, `MotionSensor`, `WaterSensor`                      | opening, motion and leak sensors                               |
+| `SmokeDetector`, `CarbonMonoxideDetector`, `TamperAlert`            | smoke, CO and tamper sensors                                   |
+| `TemperatureMeasurement`, `RelativeHumidityMeasurement`             | temperature (°C) and humidity                                  |
+| `IlluminanceMeasurement`, `CarbonDioxideMeasurement`, `Battery`…    | illuminance, CO2, UV index, battery, presence                  |
 
-## Configuration
+Each hub device makes **one Gladys device**, named after its label and room
+("Ceiling light (Living room)"); its hub id, room and driver are kept in its
+parameters. Devices with none of these capabilities (speakers, for now) are
+left out. Water valves are not controlled (a valve driven as a switch is shown
+read-only).
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+## Requirements
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+- A Hubitat Elevation hub (C-5, C-7, C-8 or later) on the same local network
+  as Gladys.
+- The **Maker API** app installed on the hub (built in).
 
-## Actions
+## Installation
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+1. In the Hubitat web interface, **Apps → Add Built-In App → Maker API**.
+   Select the devices Gladys may see and control, and click **Done**. Leave
+   "Allow Access via Remote / Cloud" off: Gladys uses the local endpoints.
+2. Open the Maker API app again: its page shows URLs like
+   `http://192.168.1.50/apps/api/12/devices?access_token=…`. Note:
+   - the **address** of the hub (`192.168.1.50`),
+   - the **app number** (`12`, after `/apps/api/`),
+   - the **access token** (after `access_token=`).
+3. In Gladys, open the integration, **Configuration**, and fill in the three
+   fields. You may paste a Maker API URL in the address field, without its
+   access token: the address and the app number are taken from it.
+4. Click **Test the connection**: the number of authorized devices, the
+   devices offered and whether the live events work show up.
+5. Open the **Discovery** tab and add the devices you want. Their values are
+   sent as soon as they are added.
 
-## Scenes
+## Options
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+- **Temperature scale of the hub**: the scale set in Hubitat (Settings →
+  Location and modes). Gladys always shows °C and converts; when the hub gives
+  the unit of a reading, the unit wins.
+- **Live events** (on by default): the integration listens to the event socket
+  of the hub (`ws://<hub>/eventsocket`). The changes reach Gladys within a
+  second, and the button presses reach your scenes. Off, or when the socket is
+  lost, the devices are read at the interval below.
+- **Read interval without live events**: 30 seconds by default (10 to 3600).
+  With the live events, the whole list is read every 5 minutes anyway.
+- **Minimum interval between two readings of a sensor**: 10 seconds by default
+  (0 to 300). A plug that reports its power every second is sent to Gladys at
+  this pace. Switches, lights, buttons, motion and contact sensors are never
+  delayed.
+- **Language of the feature names**: French or English, for the devices added
+  from now on.
+- **Allow lock control from Gladys** (off by default): see Safety.
+- **Allow garage door control from Gladys** (off by default): see Safety.
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+## Safety
 
-## Dashboard
+- **Locks and garage doors are read-only by default.** Their state shows up,
+  but every command is refused until you turn on the matching option. Once on,
+  Gladys can **unlock** your door and **open** your garage, from the dashboard,
+  your scenes and the voice assistants: the garage door command is a switch,
+  so a "turn everything off" scene closes it.
+- Before a lock or garage door command, the integration **reads the device
+  again** on the hub, and refuses when its state is unknown or moving
+  (opening, closing); nothing is sent when it is already in place. It reads
+  the device again 15 seconds later.
+- The commands of one device are sent **one at a time**. Gladys waits 5
+  seconds for an answer: a command that could not leave within 3.5 seconds
+  is refused, never sent late.
+- The integration **never changes the alarm (HSM) nor the modes** of the hub:
+  there is no such command in it.
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+## Good to know
+
+- **The hub stays in charge of the devices**: Gladys sends its commands to the
+  Maker API, which drives them. Keep the hub running.
+- **Buttons**: each button number is a feature (`Button 1`, `Button 2`…).
+  Pushed is a click, double tapped a double click, held a long press, released
+  its end. The presses only arrive through the live events: with them off,
+  the buttons stay silent.
+- **The event socket carries the events of every device of the hub**, not
+  only those you authorized: the integration keeps the authorized ones and
+  drops the rest. It needs no token.
+- **Door contacts**: Gladys shows 0 for open and 1 for closed; the integration
+  converts.
+- **Transport badge**: a device turns "unreachable" when the hub is, or when
+  Hubitat reports it offline (`healthStatus`); an orange dot means the live
+  events are lost and the state is read at the configured interval.
+- **Devices authorized later** in the Maker API show up in Discovery at the
+  next full read (5 minutes at most). The **Scan** button reads them at once.
 
 ## Troubleshooting
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+| Status message                            | What to do                                                                                 |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------ |
+| The Maker API refused the access token    | Copy the token again from the Maker API app page.                                          |
+| No Maker API app answers with this number | Check the app number, after `/apps/api/` in the URLs of the app.                           |
+| The Hubitat hub is unreachable            | Check the address, seen from the Gladys machine (not `localhost`), and that the hub is on. |
+| The address contains the access token     | Keep only the address of the hub in that field, and paste the token in its own field.      |
+| No live events from the hub               | Gladys reads the devices at the configured interval meanwhile, and tries again by itself.  |
+
+The logs of the integration (Gladys, integration page) give the details.
+
+## Privacy
+
+Everything stays on your local network: the integration only talks to your
+hub, over the Maker API and its event socket. The access token is kept by
+Gladys in its database, never shown again, and sent only to your hub; it is
+never written to the logs. Hubitat and Hubitat Elevation are trademarks of
+Hubitat, Inc.; this integration is not affiliated with Hubitat.

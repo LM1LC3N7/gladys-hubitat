@@ -1,177 +1,186 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Hubitat Elevation",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Your Hubitat hub devices in Gladys: lights, plugs, shades, thermostats, sensors. Unofficial.",
+    "fr": "Les appareils de votre hub Hubitat dans Gladys : lumières, prises, volets, capteurs. Non officiel."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-hubitat:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-hubitat/main/cover.png",
+  "categories": ["protocols", "lighting", "climate"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your Hubitat Elevation devices in Gladys",
+        "fr": "Vos appareils Hubitat Elevation dans Gladys"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "The devices you authorize in the Maker API app of your hub are offered in the Discovery tab: switches, dimmers, colour and white bulbs, plugs with their consumption, shades, thermostats, buttons, contact, motion, leak, smoke and CO sensors, temperature, humidity, illuminance, battery. The states follow the hub live and Gladys controls the devices through it, on your local network only. Locks and garage doors stay read-only until you allow them below; the alarm (HSM) and the modes are never changed. Never tested on a real hub yet. Unofficial, not affiliated with Hubitat.",
+        "fr": "Les appareils que vous autorisez dans l'app Maker API de votre hub sont proposés dans l'onglet Découverte : interrupteurs, variateurs, ampoules couleur et blanches, prises avec leur consommation, volets, thermostats, boutons, capteurs d'ouverture, de mouvement, de fuite, de fumée et de CO, température, humidité, luminosité, batterie. Les états suivent le hub en direct et Gladys pilote les appareils à travers lui, uniquement sur votre réseau local. Serrures et portes de garage restent en lecture seule tant que vous ne les autorisez pas ci-dessous ; l'alarme (HSM) et les modes ne sont jamais modifiés. Jamais testée sur un vrai hub pour l'instant. Non officiel, sans lien avec Hubitat."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-hubitat/blob/main/docs/fr.md",
+          "label": { "en": "Guide (French)", "fr": "Guide (français)" }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-hubitat/blob/main/docs/en.md",
+          "label": { "en": "Guide (English)", "fr": "Guide (anglais)" }
+        },
+        {
+          "url": "https://docs2.hubitat.com/en/apps/maker-api",
+          "label": { "en": "Hubitat Maker API", "fr": "La Maker API de Hubitat (anglais)" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
+      "key": "hub_address",
+      "type": "string",
+      "label": { "en": "Address of the hub", "fr": "Adresse du hub" },
       "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+        "en": "The local IP address of your Hubitat hub, like 192.168.1.50. A Maker API URL copied from the app page works too, without its access_token.",
+        "fr": "L'adresse IP locale de votre hub Hubitat, par exemple 192.168.1.50. Une URL de la Maker API copiée depuis la page de l'app convient aussi, sans son access_token."
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "placeholder": { "en": "192.168.1.50", "fr": "192.168.1.50" },
+      "required": true
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
+      "key": "app_id",
+      "type": "string",
+      "label": { "en": "Maker API app number", "fr": "Numéro de l'app Maker API" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "In Hubitat, Apps → Maker API: the number after /apps/api/ in the URLs the app shows.",
+        "fr": "Dans Hubitat, Apps → Maker API : le nombre après /apps/api/ dans les URL affichées par l'app."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "placeholder": { "en": "12", "fr": "12" },
+      "required": true
     },
     {
-      "key": "unit",
+      "key": "access_token",
+      "type": "secret",
+      "label": { "en": "Maker API access token", "fr": "Jeton d'accès de la Maker API" },
+      "description": {
+        "en": "Shown on the Maker API app page. Kept by Gladys in its database, never shown again, and sent only to your hub.",
+        "fr": "Affiché sur la page de l'app Maker API. Gardé par Gladys dans sa base, jamais réaffiché, et envoyé seulement à votre hub."
+      },
+      "required": true
+    },
+    {
+      "key": "temperature_scale",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "label": { "en": "Temperature scale of the hub", "fr": "Échelle de température du hub" },
+      "description": {
+        "en": "The scale set in Hubitat (Settings → Location and modes). Gladys shows the temperatures in °C and converts.",
+        "fr": "L'échelle réglée dans Hubitat (Settings → Location and modes). Gladys affiche les températures en °C et convertit."
+      },
       "required": false,
-      "default": "celsius",
+      "default": "C",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        { "value": "C", "label": { "en": "Celsius (°C)", "fr": "Celsius (°C)" } },
+        { "value": "F", "label": { "en": "Fahrenheit (°F)", "fr": "Fahrenheit (°F)" } }
       ]
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "live_events",
+      "type": "boolean",
+      "label": { "en": "Live events", "fr": "Événements en direct" },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Listens to the event socket of the hub (ws://<hub>/eventsocket): the states follow within a second and the button presses reach your scenes. Off: the devices are read at the interval below and the presses are not seen.",
+        "fr": "Écoute le socket d'événements du hub (ws://<hub>/eventsocket) : les états suivent en une seconde et les appuis sur les boutons arrivent à vos scènes. Désactivé : les appareils sont lus à l'intervalle ci-dessous et les appuis ne sont pas vus."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
+      "default": true
+    },
+    {
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Read interval without live events (s)",
+        "fr": "Intervalle de lecture sans événements en direct (s)"
+      },
+      "description": {
+        "en": "How often every device is read when the live events are off or lost (10 to 3600 s). With them, every 5 minutes.",
+        "fr": "Fréquence de lecture de tous les appareils quand les événements en direct sont désactivés ou perdus (10 à 3600 s). Avec eux, toutes les 5 minutes."
+      },
+      "required": false,
+      "default": 30,
+      "min": 10,
       "max": 3600
+    },
+    {
+      "key": "sensor_interval",
+      "type": "number",
+      "label": {
+        "en": "Minimum interval between two readings of a sensor (s)",
+        "fr": "Intervalle minimum entre deux mesures d'un capteur (s)"
+      },
+      "description": {
+        "en": "Some devices report every second (power meters): Gladys keeps the last reading at this pace. Switches, lights, buttons, motion and contact sensors are never delayed.",
+        "fr": "Certains appareils remontent chaque seconde (mesures de puissance) : Gladys garde la dernière mesure à ce rythme. Interrupteurs, lumières, boutons, détecteurs de mouvement et d'ouverture ne sont jamais retardés."
+      },
+      "required": false,
+      "default": 10,
+      "min": 0,
+      "max": 300
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the names of the features of the devices added from now on.",
+        "fr": "Sert aux noms des fonctionnalités des appareils ajoutés désormais."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        { "value": "fr", "label": { "en": "French", "fr": "Français" } },
+        { "value": "en", "label": { "en": "English", "fr": "Anglais" } }
+      ]
+    },
+    {
+      "key": "allow_lock_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow lock control from Gladys",
+        "fr": "Autoriser le pilotage des serrures depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: locks are read-only. On, Gladys can lock and UNLOCK them, from the dashboard, scenes and voice assistants.",
+        "fr": "Désactivé par défaut : les serrures sont en lecture seule. Activé, Gladys peut les verrouiller et les DÉVERROUILLER, depuis le tableau de bord, les scènes et les assistants vocaux."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "allow_garage_door_control",
+      "type": "boolean",
+      "label": {
+        "en": "Allow garage door control from Gladys",
+        "fr": "Autoriser le pilotage des portes de garage depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: garage doors are read-only. On, Gladys can open and close them; the command is a switch, reachable by \"turn everything off\" scenes and voice assistants.",
+        "fr": "Désactivé par défaut : les portes de garage sont en lecture seule. Activé, Gladys peut les ouvrir et les fermer ; la commande est un interrupteur, atteint par les scènes « tout éteindre » et les assistants vocaux."
+      },
+      "required": false,
+      "default": false
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
-      "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "timeout_seconds": 60
     }
   ]
 }
