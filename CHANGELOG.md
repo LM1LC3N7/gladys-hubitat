@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-19
+
 ### Fixed
 
 - Energy indexes: a jump could be billed in full in the Energy tab (no check
@@ -57,5 +59,6 @@ the notes of the version's GitHub Release.
 - Transport badges (hub unreachable, device offline, live events lost), a
   "Test the connection" button, English and French texts.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-hubitat/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/LM1LC3N7/gladys-hubitat/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/LM1LC3N7/gladys-hubitat/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/LM1LC3N7/gladys-hubitat/releases/tag/v0.1.1
