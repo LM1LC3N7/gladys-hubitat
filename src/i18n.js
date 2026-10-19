@@ -58,8 +58,27 @@ const kwh = (n) => Math.round(n * 1000) / 1000;
 /** The kWh an accepted hold counts: the jump, 0 for a drop. */
 const counted = ({ direction, from, to }) => (direction === 'up' ? kwh(to - from) : 0);
 
+/** kWh shown in French: a decimal comma (312,4). */
+const kwhFr = (n) => String(kwh(n)).replace('.', ',');
+
 /** Holds listed in the answer of the action (the others are counted, not named). */
 const LISTED = 5;
+
+/** The holds of an answer: the first LISTED named, with their kWh, and the total. */
+function listed(holds) {
+  const total = kwh(holds.reduce((sum, h) => sum + counted(h), 0));
+  const shown = holds.slice(0, LISTED);
+  return {
+    total,
+    more: holds.length - shown.length,
+    en: shown
+      .map((h) => `${h.name}: ${kwh(h.from)} → ${kwh(h.to)} kWh (${counted(h)} kWh)`)
+      .join('; '),
+    fr: shown
+      .map((h) => `${h.name} : ${kwhFr(h.from)} → ${kwhFr(h.to)} kWh (${kwhFr(counted(h))} kWh)`)
+      .join(' ; '),
+  };
+}
 
 /** Why the hub is unreachable, with the hint that fits. */
 function unreachable(err) {
@@ -240,18 +259,18 @@ export const T = {
       direction === 'down'
         ? {
             en: trim(
-              `Energy index held back: it dropped from ${kwh(from)} to ${kwh(to)} kWh. "Accept the held index" (configuration) takes it, 0 kWh billed.`,
+              `Energy index held back: it dropped from ${kwh(from)} to ${kwh(to)} kWh. "Accept the held index" (configuration, two clicks) takes it, 0 kWh billed.`,
             ),
             fr: trim(
-              `Index d'énergie retenu : baisse de ${kwh(from)} à ${kwh(to)} kWh. « Accepter l'index retenu » (configuration) la prend, 0 kWh facturé.`,
+              `Index d'énergie retenu : baisse de ${kwhFr(from)} à ${kwhFr(to)} kWh. « Accepter l'index retenu » (configuration, deux clics) la prend, 0 kWh facturé.`,
             ),
           }
         : {
             en: trim(
-              `Energy index held back: it jumped from ${kwh(from)} to ${kwh(to)} kWh. "Accept the held index" (configuration) would count ${kwh(to - from)} kWh at once.`,
+              `Energy index held back: it jumped from ${kwh(from)} to ${kwh(to)} kWh. "Accept the held index" (configuration, two clicks) would count ${kwh(to - from)} kWh at once.`,
             ),
             fr: trim(
-              `Index d'énergie retenu : saut de ${kwh(from)} à ${kwh(to)} kWh. « Accepter l'index retenu » (configuration) compterait ${kwh(to - from)} kWh d'un coup.`,
+              `Index d'énergie retenu : saut de ${kwhFr(from)} à ${kwhFr(to)} kWh. « Accepter l'index retenu » (configuration, deux clics) compterait ${kwhFr(to - from)} kWh d'un coup.`,
             ),
           },
   },
@@ -261,21 +280,32 @@ export const T = {
       en: 'No energy index is held back: nothing to accept.',
       fr: "Aucun index d'énergie n'est retenu : rien à accepter.",
     },
-    /** @param {Array<{ name, direction, from, to }>} accepted */
-    done(accepted) {
-      const total = kwh(accepted.reduce((sum, a) => sum + counted(a), 0));
-      const shown = accepted.slice(0, LISTED);
-      const more = accepted.length - shown.length;
-      const line = (a) => `${a.name}: ${kwh(a.from)} → ${kwh(a.to)} kWh (${counted(a)} kWh)`;
+    /** First click: the holds and their kWh, nothing accepted. @param {Array<{ name, direction, from, to }>} holds */
+    confirm(holds) {
+      const { total, more, en, fr } = listed(holds);
       return {
         en:
-          `Accepted (${plural(accepted.length, 'index', 'indexes')}): ${shown.map(line).join('; ')}` +
+          `Nothing accepted yet. Held back (${plural(holds.length, 'index', 'indexes')}): ${en}` +
+          (more > 0 ? `; and ${more} more` : '') +
+          `. Accepting would count ${total} kWh at once as consumption; a drop bills nothing. If these values are right, click "Accept the held index" again within 2 minutes.`,
+        fr:
+          `Rien n'est encore accepté. Retenu (${plural(holds.length, 'index', 'index')}) : ${fr}` +
+          (more > 0 ? ` ; et ${more} autre${more === 1 ? '' : 's'}` : '') +
+          `. Accepter compterait ${kwhFr(total)} kWh d'un coup comme consommation ; une baisse ne facture rien. Si ces valeurs sont justes, cliquez à nouveau sur « Accepter l'index retenu » dans les 2 minutes.`,
+      };
+    },
+    /** Second click: what was taken. @param {Array<{ name, direction, from, to }>} accepted */
+    done(accepted) {
+      const { total, more, en, fr } = listed(accepted);
+      return {
+        en:
+          `Accepted (${plural(accepted.length, 'index', 'indexes')}): ${en}` +
           (more > 0 ? `; and ${more} more` : '') +
           `. ${total} kWh will be counted at once as consumption (plus what the devices use meanwhile); a drop bills nothing. A different value stays held.`,
         fr:
-          `Accepté (${plural(accepted.length, 'index', 'index')}) : ${shown.map(line).join(' ; ')}` +
+          `Accepté (${plural(accepted.length, 'index', 'index')}) : ${fr}` +
           (more > 0 ? ` ; et ${more} autre${more === 1 ? '' : 's'}` : '') +
-          `. ${total} kWh seront comptés d'un coup comme consommation (plus ce que les appareils consomment d'ici là) ; une baisse ne facture rien. Une autre valeur reste retenue.`,
+          `. ${kwhFr(total)} kWh seront comptés d'un coup comme consommation (plus ce que les appareils consomment d'ici là) ; une baisse ne facture rien. Une autre valeur reste retenue.`,
       };
     },
   },

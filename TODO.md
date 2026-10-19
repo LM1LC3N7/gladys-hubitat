@@ -199,6 +199,31 @@ up to date at the end of every milestone.
   "old reference" case moved from 10 to 30 days so that the margin of 25 kW
   still exceeds the rise). Behaviour change: a meter reset by `resetEnergy`
   is no longer taken by itself, the user accepts the drop (nothing billed).
+- **Guard, follow-up of the approval (2026-10-20)**:
+  - M1: `accept_held_index` takes two clicks. The first lists the holds shown
+    and their kWh and keeps a fingerprint (`featureId:direction:from:threshold`
+    of each, sorted); a second click within 2 minutes (`TIMINGS.acceptConfirm`)
+    with the same fingerprint accepts them, otherwise it is a first click
+    again. Still all the holds shown at once (one action without parameters):
+    the listing lets the user wait for a glitch to go back first.
+  - F1: `maxKw` by type: 10 kW for `switch/energy` (a plug, a module), 25 kW
+    for `energy-sensor/index` (a meter alone), from the category of the
+    created feature; an unknown one gets the stricter 10 kW. The guard checks
+    `maxKw` (finite, above 0, up to 1000) and throws a RangeError otherwise.
+  - F2: a drop is shown (badge, log, /data, the action) only once it lasted
+    `TIMINGS.dropShownAfter` (60 s), measured in src/app.js (`trackDrop`,
+    `shownHold`) with a timer; the guard is unchanged and holds a young drop
+    all the same. A drop read back from /data (so one that lasted) is shown
+    at once. A deleted device now leaves /data at once.
+  - F3: docs fr/en explain the meter reset (the consumption between the reset
+    and the click is not counted) and the driver that resets by itself (held
+    until the click or the old value).
+  - Minor: `boundedState` returns an object without prototype and drops a
+    `__proto__` key; French texts use a decimal comma (312,4 kWh).
+  - Reviewer scenarios (`_scratch/hubitat-guard-review/scenarios.test.mjs`):
+    C3, E2 and F1 still click once (now only a listing), G1 is now held
+    (10 kW for a plug), H1 compares with a plain `{}` (now without prototype):
+    expected by these changes, not regressions.
 - **Manifest version test**: `test/manifest.test.js` pinned `0.1.0`, which the
   release workflow had bumped to 0.1.1 (the test failed on `main`); it now
   checks the shape of the version only.

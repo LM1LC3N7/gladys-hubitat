@@ -1,8 +1,9 @@
 // -----------------------------------------------------------------------------
 // Plausibility of an energy index (`energy`, kWh), the value Gladys bills. Pure.
 // The IndexGuard of gladys-p1-monitor (src/guard.js, approved), unchanged but
-// for one thing: the highest plausible power is a parameter (`maxKw`, 25 kW
-// for one Hubitat device by default, INDEX_MAX_KW of src/constants.js).
+// for one thing: the highest plausible power is a parameter (`maxKw`, checked:
+// INDEX_MAX_KW of src/constants.js, 10 kW for a plug, 25 kW for a meter alone,
+// the default).
 //
 // The core turns the deltas of an `energy-sensor` / `index` (or `switch` /
 // `energy`) feature into consumption and cost: it skips a delta below zero (a
@@ -70,7 +71,10 @@ export class IndexGuard {
    * an acceptance takes). `maxKw`: the highest power the device may draw on
    * average between two values.
    */
-  constructor(last, saved, loadedAt, maxKw = INDEX_MAX_KW) {
+  constructor(last, saved, loadedAt, maxKw = INDEX_MAX_KW.meter) {
+    if (typeof maxKw !== 'number' || !Number.isFinite(maxKw) || maxKw <= 0 || maxKw > 1000) {
+      throw new RangeError(`maxKw must be a power in kW above 0 and up to 1000, not ${maxKw}`);
+    }
     this.maxKw = maxKw;
     const kept = validLast(saved?.last);
     const known = validLast(last);

@@ -2,7 +2,7 @@
 // The energy index guard (src/guard.js) and the /data store (src/store.js).
 // The guard tests are those of gladys-p1-monitor (test/model.test.js), whose
 // IndexGuard is reused unchanged but for the highest plausible power, a
-// parameter here (25 kW for one Hubitat device by default).
+// parameter here (10 kW for a plug, 25 kW for a meter alone, the default).
 // -----------------------------------------------------------------------------
 
 import { test } from 'node:test';
@@ -199,8 +199,8 @@ test('index guard: under a held jump, an old reference never lets a big rise thr
   assert.equal(guard.held, undefined);
 });
 
-test('index guard: the highest plausible power is a parameter, 25 kW per device by default', () => {
-  assert.equal(INDEX_MAX_KW, 25);
+test('index guard: the highest plausible power is a parameter, 25 kW (a meter) by default', () => {
+  assert.deepEqual(INDEX_MAX_KW, { plug: 10, meter: 25 });
   assert.equal(new IndexGuard().maxKw, 25);
   // An oven at 3.6 kW for an hour: plausible.
   assert.equal(new IndexGuard({ value: 100, at: 0 }).accept(103.6, HOUR), true);
@@ -222,16 +222,16 @@ test('the /data store: written through a temporary file, read back, empty when a
   const dir = await mkdtemp(join(tmpdir(), 'hubitat-'));
   try {
     const store = createFileStore(join(dir, 'state.json'));
-    assert.deepEqual(store.load(), {});
+    assert.deepEqual({ ...store.load() }, {});
     const state = { 'a:energy': { last: { value: 1, at: 2 }, held: null } };
     await store.save(state);
-    assert.deepEqual(store.load(), state);
-    assert.deepEqual(createFileStore(join(dir, 'missing', 'x.json')).load(), {});
+    assert.deepEqual({ ...store.load() }, state);
+    assert.deepEqual({ ...createFileStore(join(dir, 'missing', 'x.json')).load() }, {});
     // Not JSON, a list, too big: nothing read back.
     const bad = join(dir, 'bad.json');
     for (const text of ['{', '[1,2]', 'null', JSON.stringify({ x: 'y'.repeat(STATE.maxBytes) })]) {
       await writeFile(bad, text, 'utf8');
-      assert.deepEqual(createFileStore(bad).load(), {}, text.slice(0, 10));
+      assert.deepEqual({ ...createFileStore(bad).load() }, {}, text.slice(0, 10));
     }
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -269,4 +269,25 @@ test('the /data store: bounded and checked when read back', () => {
   assert.equal(guard.held, undefined);
   const memory = createMemoryStore({ a: { last: { value: 1, at: 0 }, held: null }, b: 7 });
   assert.deepEqual(Object.keys(memory.load()), ['a']);
+});
+
+test('index guard: maxKw is checked (a positive, finite power in kW)', () => {
+  for (const bad of [0, -1, NaN, Infinity, '10', null, 1001]) {
+    assert.throws(() => new IndexGuard(undefined, undefined, 0, bad), RangeError, String(bad));
+  }
+  assert.equal(new IndexGuard(undefined, undefined, 0, 10).maxKw, 10);
+  // A plug at 10 kW: +15 kWh in an hour is held, +10 is taken.
+  assert.equal(new IndexGuard({ value: 100, at: 0 }, undefined, 0, 10).accept(115, HOUR), false);
+  assert.equal(new IndexGuard({ value: 100, at: 0 }, undefined, 0, 10).accept(110, HOUR), true);
+});
+
+test('the /data store: no prototype, a "__proto__" key of the file dropped', () => {
+  const state = boundedState(
+    JSON.parse(
+      '{"__proto__":{"last":{"value":5,"at":1},"held":null},"a":{"last":{"value":1,"at":1},"held":null}}',
+    ),
+  );
+  assert.equal(Object.getPrototypeOf(state), null);
+  assert.deepEqual(Object.keys(state), ['a']);
+  assert.equal({}.last, undefined, 'Object.prototype untouched');
 });

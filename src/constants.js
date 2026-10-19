@@ -10,8 +10,12 @@ export const ACTIONS = {
 };
 
 // --- Plausibility of an energy index (the one Gladys bills), src/guard.js ----------
-/** One Hubitat device (a plug, a module, a meter) never draws more than this on average. */
-export const INDEX_MAX_KW = 25;
+/**
+ * The highest power (kW) a Hubitat device draws on average between two values:
+ * a plug or a module (`switch/energy`, ~10 kW), a meter alone
+ * (`energy-sensor/index`, a whole home, 25 kW).
+ */
+export const INDEX_MAX_KW = { plug: 10, meter: 25 };
 /** kWh always accepted on top of INDEX_MAX_KW × hours (rounding, a late read). */
 export const INDEX_SLACK_KWH = 0.5;
 
@@ -128,4 +132,8 @@ export const TIMINGS = {
   /** A refused socket is logged for its first failures, then once in this many. */
   liveWarnFirst: 3,
   liveWarnEvery: 10,
+  /** A drop of an energy index is shown (badge, log, /data) only once it lasted this long. */
+  dropShownAfter: 60_000,
+  /** "Accept the held index": the second click must come within this delay of the first. */
+  acceptConfirm: 2 * 60_000,
 };

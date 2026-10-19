@@ -18,7 +18,11 @@
 // for. No HSM or mode command exists in this integration.
 // -----------------------------------------------------------------------------
 
-import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
+import {
+  DEVICE_FEATURE_CATEGORIES,
+  DEVICE_TRANSPORTS,
+  createLogger,
+} from '@gladysassistant/integration-sdk';
 import { normalizeConfig } from './config.js';
 import { BUTTON_EVENTS, INDEX_MAX_KW, STATE, TIMINGS } from './constants.js';
 import { buildModel, emptyModel } from './devices.js';
@@ -64,8 +68,7 @@ function lastValueOf(feature) {
 }
 
 /** What /data keeps of a guard, compared to know when to write it: the hold apart. */
-function stateKeys(guard) {
-  const { last, held } = guard.state();
+function stateKeys({ last, held }) {
   const hold = JSON.stringify(held && [held.direction, held.from, held.threshold]);
   return { hold, all: JSON.stringify([last, hold]) };
 }
@@ -171,6 +174,10 @@ export class HubitatApp {
     this.savedKeys = new Map();
     /** energy feature id -> the hold last logged */
     this.holdLogged = new Map();
+    /** energy feature id -> { from, since, timer }: a drop held, shown once it lasted */
+    this.drops = new Map();
+    /** The first click of "Accept the held index": { fingerprint, at } */
+    this.pendingAccept = undefined;
     this.stateDirty = false;
     this.stateTimer = undefined;
     this.stateWrite = Promise.resolve();
@@ -261,6 +268,10 @@ export class HubitatApp {
       ...this.readBackTimers,
     ]) {
       this.timers.clearTimeout(timer);
+    }
+    for (const drop of this.drops.values()) {
+      // Kept (its start stays): a drop that lasted is told at the next value read.
+      this.timers.clearTimeout(drop.timer);
     }
     for (const guard of this.guards.values()) {
       this.timers.clearTimeout(guard.timer);
@@ -573,6 +584,7 @@ export class HubitatApp {
     }
     const guard = this.indexGuardOf(featureId);
     const taken = guard.accept(value.state, this.now());
+    this.trackDrop(featureId, guard);
     this.noteHold(featureId, guard);
     this.saveGuard(featureId, guard);
     if (taken) {
@@ -582,22 +594,87 @@ export class HubitatApp {
     }
   }
 
+  /** The highest plausible power of an energy feature: a plug (switch/energy) or a meter alone. */
+  maxKwOf(feature) {
+    return feature?.category === DEVICE_FEATURE_CATEGORIES.ENERGY_SENSOR
+      ? INDEX_MAX_KW.meter
+      : INDEX_MAX_KW.plug;
+  }
+
   /** The guard of a created energy feature, from Gladys (`last_value`) and /data. */
   indexGuardOf(featureId) {
     let guard = this.indexGuards.get(featureId);
     if (!guard) {
       const saved = this.loadState()[featureId];
       const feature = createdFeature(this.gladys.devices, featureId);
-      guard = new IndexGuard(lastValueOf(feature), saved, this.now(), INDEX_MAX_KW);
+      const maxKw = this.maxKwOf(feature);
+      guard = new IndexGuard(lastValueOf(feature), saved, this.now(), maxKw);
       this.indexGuards.set(featureId, guard);
-      this.savedKeys.set(featureId, stateKeys(new IndexGuard(undefined, saved)));
+      if (guard.held?.direction === 'down') {
+        // Only a drop that lasted is ever written: shown at once after a restart.
+        this.drops.set(featureId, { from: guard.held.from, since: -Infinity });
+      }
+      this.savedKeys.set(featureId, stateKeys(new IndexGuard(undefined, saved, 0, maxKw).state()));
     }
     return guard;
   }
 
-  /** A hold is logged when it starts or changes, and its end. */
-  noteHold(featureId, guard) {
+  /**
+   * A drop is shown (badge, log, /data, the action) only once it lasted
+   * TIMINGS.dropShownAfter: a driver that jitters (312.41, 312.40, 312.41)
+   * tells nothing. A jump is shown at once. The guard itself is not changed:
+   * a young drop is held all the same (the last accepted value is sent).
+   */
+  trackDrop(featureId, guard) {
     const held = guard.held;
+    const seen = this.drops.get(featureId);
+    if (held?.direction !== 'down') {
+      if (seen) {
+        this.timers.clearTimeout(seen.timer);
+        this.drops.delete(featureId);
+      }
+      return;
+    }
+    if (seen && seen.from === held.from) {
+      return;
+    }
+    this.timers.clearTimeout(seen?.timer);
+    const drop = { from: held.from, since: this.now() };
+    drop.timer = this.timers.setTimeout(() => {
+      drop.timer = undefined;
+      const current = this.indexGuards.get(featureId);
+      if (this.drops.get(featureId) !== drop || current?.held?.direction !== 'down') {
+        return;
+      }
+      // Still dropped a minute later: told now.
+      this.noteHold(featureId, current);
+      this.saveGuard(featureId, current);
+      const owner = this.ownerOfIndex(featureId);
+      if (owner !== undefined) {
+        this.publishTransportOf(owner);
+      }
+    }, TIMINGS.dropShownAfter);
+    this.drops.set(featureId, drop);
+  }
+
+  /** The hold of a guard as the user sees it: a drop only once it lasted. */
+  shownHold(featureId, guard) {
+    const held = guard.held;
+    if (!held) {
+      return undefined;
+    }
+    if (held.direction === 'up') {
+      return held;
+    }
+    const seen = this.drops.get(featureId);
+    return seen && seen.from === held.from && this.now() - seen.since >= TIMINGS.dropShownAfter
+      ? held
+      : undefined;
+  }
+
+  /** A hold is logged when it is shown or changes, and its end. */
+  noteHold(featureId, guard) {
+    const held = this.shownHold(featureId, guard);
     const key = held ? `${held.direction}:${held.from}:${held.threshold}` : undefined;
     if (key === this.holdLogged.get(featureId)) {
       return;
@@ -607,19 +684,23 @@ export class HubitatApp {
       this.logger.warn(
         `${featureId}: energy index ${held.direction === 'down' ? 'drop' : 'jump'} from ${held.from} to ${held.to} kWh held back, the last accepted value is sent again; the "Accept the held index" action takes it`,
       );
-    } else {
+    } else if (!guard.held) {
       this.holdLogged.delete(featureId);
       this.logger.info(`${featureId}: energy index no longer held`);
     }
   }
 
-  /** The held energy indexes of a Gladys device: [{ featureId, direction, from, to }]. */
+  /** The energy indexes held and shown, of one Gladys device or all: [{ featureId, direction, from, to, threshold }]. */
   heldOf(deviceId) {
     const held = [];
     for (const [featureId, guard] of this.indexGuards) {
-      if (guard.held && featureId.startsWith(`${deviceId}:`) && this.created.has(featureId)) {
-        const { direction, from, to } = guard.held;
-        held.push({ featureId, direction, from, to });
+      if (deviceId !== undefined && !featureId.startsWith(`${deviceId}:`)) {
+        continue;
+      }
+      const shown = this.created.has(featureId) && this.shownHold(featureId, guard);
+      if (shown) {
+        const { direction, from, to, threshold } = shown;
+        held.push({ featureId, direction, from, to, threshold });
       }
     }
     return held;
@@ -631,18 +712,20 @@ export class HubitatApp {
   }
 
   /**
-   * Keeps the guard in /data: at once when its hold starts, changes or ends;
-   * a reference that only rose at most every STATE.saveEvery (Gladys holds it
-   * too, as `last_value`).
+   * Keeps the guard in /data, as the user sees it (a young drop is not
+   * written): at once when its hold starts, changes or ends; a reference
+   * that only rose at most every STATE.saveEvery (Gladys holds it too, as
+   * `last_value`).
    */
   saveGuard(featureId, guard) {
-    const keys = stateKeys(guard);
+    const state = { last: guard.last ?? null, held: this.shownHold(featureId, guard) ?? null };
+    const keys = stateKeys(state);
     const before = this.savedKeys.get(featureId);
     if (before?.all === keys.all) {
       return;
     }
     this.savedKeys.set(featureId, keys);
-    this.loadState()[featureId] = guard.state();
+    this.loadState()[featureId] = state;
     this.stateDirty = true;
     if (before?.hold !== keys.hold) {
       this.timers.clearTimeout(this.stateTimer);
@@ -697,11 +780,15 @@ export class HubitatApp {
         removed = true;
       }
     }
-    for (const map of [this.indexGuards, this.savedKeys, this.holdLogged]) {
+    for (const featureId of [...this.drops.keys()].filter(owned)) {
+      this.timers.clearTimeout(this.drops.get(featureId).timer);
+    }
+    for (const map of [this.indexGuards, this.savedKeys, this.holdLogged, this.drops]) {
       for (const featureId of [...map.keys()].filter(owned)) {
         map.delete(featureId);
       }
     }
+    this.pendingAccept = undefined;
     if (removed) {
       this.stateDirty = true;
       await this.writeState();
@@ -709,24 +796,41 @@ export class HubitatApp {
   }
 
   /**
-   * The "Accept the held index" action: takes each index held as shown now
-   * (plus what the device may draw until its next value, src/guard.js), never
-   * anything else. Answers with the kWh that will be counted.
+   * The "Accept the held index" action, in two clicks. The first one only
+   * lists the indexes held and the kWh at stake. A second one within
+   * TIMINGS.acceptConfirm takes them, if the same holds are still there
+   * (featureId:direction:from:threshold); otherwise it is a first click
+   * again. Each one is taken as shown now (plus what the device may draw
+   * until its next value, src/guard.js), never anything else.
    */
   async acceptHeldIndex() {
-    const accepted = [];
-    for (const [featureId, guard] of this.indexGuards) {
-      if (!this.created.has(featureId)) {
-        continue;
-      }
-      const taken = guard.acceptHeld();
-      if (taken) {
-        const name = createdFeature(this.gladys.devices, featureId)?.name ?? featureId;
-        accepted.push({ featureId, name, ...taken });
-      }
-    }
-    if (accepted.length === 0) {
+    const holds = this.heldOf().sort((a, b) => (a.featureId < b.featureId ? -1 : 1));
+    if (holds.length === 0) {
+      this.pendingAccept = undefined;
       return T.accept.nothing;
+    }
+    const nameOf = (featureId) => createdFeature(this.gladys.devices, featureId)?.name ?? featureId;
+    const fingerprint = holds
+      .map((h) => `${h.featureId}:${h.direction}:${h.from}:${h.threshold}`)
+      .join('|');
+    const pending = this.pendingAccept;
+    const now = this.now();
+    if (
+      !pending ||
+      pending.fingerprint !== fingerprint ||
+      now - pending.at > TIMINGS.acceptConfirm ||
+      now < pending.at
+    ) {
+      this.pendingAccept = { fingerprint, at: now };
+      return T.accept.confirm(holds.map((h) => ({ ...h, name: nameOf(h.featureId) })));
+    }
+    this.pendingAccept = undefined;
+    const accepted = [];
+    for (const { featureId } of holds) {
+      const taken = this.indexGuards.get(featureId)?.acceptHeld();
+      if (taken) {
+        accepted.push({ featureId, name: nameOf(featureId), ...taken });
+      }
     }
     for (const { featureId, direction, from, to } of accepted) {
       this.logger.info(
@@ -1106,6 +1210,14 @@ export class HubitatApp {
     if (device?.external_id) {
       this.transports.delete(device.external_id);
       this.publisher.forget(device.external_id);
+      // Its guards leave /data now (writeState keeps the created features only).
+      const owned = Object.keys(this.loadState()).some((id) =>
+        id.startsWith(`${device.external_id}:`),
+      );
+      if (owned) {
+        this.stateDirty = true;
+        await this.writeState();
+      }
     }
   }
 

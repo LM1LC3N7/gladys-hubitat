@@ -15,12 +15,14 @@ the notes of the version's GitHub Release.
 - Energy indexes: a jump could be billed in full in the Energy tab (no check
   of the rise), and a drop was taken by the next reading above it. Every
   energy feature now has the index guard of P1 Monitor: 0 never published, a
-  drop or a jump above 25 kW on average held back (the last accepted value
-  sent again), shown on the device badge and in the log, kept in `/data`
-  across restarts, and taken only by the new "Accept the held index" button,
-  bounded to the value shown, which answers with the kWh counted. Neither
-  saving the configuration nor a reconnection accepts it; creating a device
-  resets its guard.
+  drop or a jump above 10 kW on average for a plug (25 kW for a meter alone)
+  held back (the last accepted value sent again), shown on the device badge
+  and in the log (a drop once it lasted a minute), kept in `/data` across
+  restarts, and taken only by the new "Accept the held index" button, in two
+  clicks: the first lists the holds and their kWh, a second one within 2
+  minutes takes exactly those, bounded to the values shown, and answers with
+  the kWh counted. Neither saving the configuration nor a reconnection
+  accepts it; creating a device resets its guard.
 
 ## [0.1.1] - 2026-10-17
 

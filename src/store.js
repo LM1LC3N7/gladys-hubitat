@@ -16,7 +16,8 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 
 /** The entries of a state read back, bounded and checked: `{ featureId: { last, held } }`. */
 export function boundedState(data) {
-  const out = {};
+  // No prototype: a key of the file never reaches Object.prototype.
+  const out = Object.create(null);
   if (!isObject(data)) {
     return out;
   }
@@ -25,7 +26,12 @@ export function boundedState(data) {
     if (count >= STATE.maxEntries) {
       break;
     }
-    if (key.length === 0 || key.length > STATE.maxKeyLength || !isObject(value)) {
+    if (
+      key.length === 0 ||
+      key.length > STATE.maxKeyLength ||
+      key === '__proto__' ||
+      !isObject(value)
+    ) {
       continue;
     }
     out[key] = {
@@ -50,11 +56,11 @@ export function createFileStore(file = STATE_FILE) {
     load() {
       try {
         if (statSync(file).size > STATE.maxBytes) {
-          return {};
+          return boundedState(null);
         }
         return boundedState(JSON.parse(readFileSync(file, 'utf8')));
       } catch {
-        return {};
+        return boundedState(null);
       }
     },
     async save(data) {

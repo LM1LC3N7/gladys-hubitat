@@ -142,20 +142,38 @@ l'atteint jamais.
   passent à l'orange que si cette réouverture échoue.
 - **Énergie** : Gladys compte chaque hausse de l'index d'énergie en entier
   dans l'onglet Énergie. L'intégration ne publie donc jamais 0, et retient
-  toute valeur anormale : une baisse, ou un saut de plus de 25 kW en moyenne
-  depuis la dernière valeur acceptée (plus 0,5 kWh de marge). Pendant une
-  retenue, la dernière valeur acceptée est renvoyée, le badge de l'appareil
-  passe à l'orange avec le saut ou la baisse et les kWh en jeu, et le journal
-  le signale. Ni la répétition, ni le temps, ni une nouvelle hausse, ni un
-  enregistrement de la configuration, ni une reconnexion ne l'acceptent :
-  seul le bouton **Accepter l'index retenu** de la configuration le fait, et
-  il prend exactement la valeur affichée (plus ce que l'appareil a pu
-  consommer depuis) en répondant avec les kWh comptés. Un saut accepté est
-  compté d'un coup comme consommation ; une baisse acceptée (compteur remis à
-  zéro par `resetEnergy`) ne facture rien. Une valeur revenue à la normale
-  lève la retenue. La retenue est gardée dans `/data` et survit à un
-  redémarrage ; créer l'appareil (à nouveau) repart de zéro. Un driver qui
-  donne des Wh est converti en kWh.
+  toute valeur anormale : une baisse, ou un saut de plus de 10 kW en moyenne
+  pour une prise ou un module (`switch/energy`), de 25 kW pour un compteur
+  seul (`energy-sensor/index`), depuis la dernière valeur acceptée (plus
+  0,5 kWh de marge). Pendant une retenue, la dernière valeur acceptée est
+  renvoyée. Un saut est signalé tout de suite ; une baisse seulement si elle
+  dure environ une minute (un driver qui oscille de 0,01 kWh ne dit rien) :
+  le badge de l'appareil passe alors à l'orange avec le saut ou la baisse et
+  les kWh en jeu, et le journal le signale. Ni la répétition, ni le temps,
+  ni une nouvelle hausse, ni un enregistrement de la configuration, ni une
+  reconnexion ne l'acceptent : seul le bouton **Accepter l'index retenu** de
+  la configuration le fait, en deux clics. Le premier liste les index retenus
+  et les kWh qui seraient comptés, sans rien accepter ; un second clic dans
+  les 2 minutes prend exactement ces index-là (si la liste a changé
+  entre-temps, il ne fait que la montrer à nouveau). Chaque index est pris à
+  la valeur affichée (plus ce que l'appareil a pu consommer depuis). Un saut
+  accepté est compté d'un coup comme consommation ; une baisse acceptée ne
+  facture rien. Une valeur revenue à la normale lève la retenue. La retenue
+  est gardée dans `/data` et survit à un redémarrage ; créer l'appareil (à
+  nouveau) repart de zéro. Un driver qui donne des Wh est converti en kWh.
+
+  Deux cas à connaître :
+
+  - **Remise à zéro du compteur** (`resetEnergy`, depuis Hubitat ou
+    l'appareil) : elle est retenue comme une baisse. Tant que vous n'avez pas
+    cliqué, la dernière valeur acceptée reste envoyée : **la consommation
+    entre la remise à zéro et votre acceptation n'est pas comptée**. Acceptez
+    donc la baisse peu après la remise à zéro.
+  - **Un driver qui se remet à zéro seul** (après une coupure, une mise à
+    jour) : la baisse reste retenue aussi, sans limite de temps, jusqu'à votre
+    clic ou jusqu'au retour de l'ancienne valeur. Si l'index repart ensuite
+    au-dessus de l'ancienne valeur, c'est un saut, retenu à son tour.
+
 - **Le socket d'événements transporte les événements de tous les appareils du
   hub**, pas seulement de ceux que vous avez autorisés : l'intégration garde
   les autorisés et ignore les autres. Il ne demande pas de jeton.

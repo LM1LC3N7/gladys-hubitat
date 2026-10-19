@@ -177,6 +177,22 @@ test('the token is not said to be encrypted (Gladys keeps secrets in clear in it
   }
 });
 
+test('the docs explain the two clicks and the two cases of a reset of the energy index', () => {
+  const fr = read('docs/fr.md').replace(/\s+/g, ' ');
+  const en = read('docs/en.md').replace(/\s+/g, ' ');
+  assert.match(fr, /en deux clics/);
+  assert.match(fr, /la consommation entre la remise à zéro et votre acceptation n'est pas comptée/);
+  assert.match(fr, /Un driver qui se remet à zéro seul\*\* .*reste retenue/);
+  assert.match(fr, /10 kW .*25 kW/);
+  assert.match(en, /in two clicks/);
+  assert.match(en, /the consumption between the reset and your acceptance is not counted/);
+  assert.match(en, /A driver that resets by itself\*\* .*stays held/);
+  assert.match(en, /10 kW .*25 kW/);
+  const action = manifest.actions.find((a) => a.key === ACTIONS.ACCEPT_HELD);
+  assert.match(action.description.fr, /second clic dans les 2 minutes/);
+  assert.match(action.description.en, /second click within 2 minutes/);
+});
+
 test('no code path changes the HSM or the modes of the hub', () => {
   for (const path of ['src/hubitat.js', 'src/constants.js', 'src/app.js', 'src/mapping.js']) {
     const code = read(path);

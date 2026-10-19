@@ -128,18 +128,35 @@ it.
   turn orange if that reopening fails.
 - **Energy**: Gladys counts every rise of an energy index in full in the
   Energy tab. So the integration never publishes 0, and holds back any
-  abnormal value: a drop, or a jump of more than 25 kW on average since the
-  last accepted value (plus a 0.5 kWh slack). While a value is held, the last
-  accepted one is sent again, the badge of the device turns orange with the
-  jump or the drop and the kWh at stake, and the log says so. Neither
-  repetition, time, a later rise, saving the configuration nor a reconnection
-  accepts it: only the **Accept the held index** button of the configuration
-  does, and it takes exactly the value shown (plus what the device may have
-  used since), answering with the kWh counted. An accepted jump is counted at
-  once as consumption; an accepted drop (a meter reset by `resetEnergy`)
-  bills nothing. A value back to normal ends the hold. The hold is kept in
-  `/data` across restarts; creating the device (again) starts afresh. A
-  driver reporting Wh is converted to kWh.
+  abnormal value: a drop, or a jump of more than 10 kW on average for a plug
+  or a module (`switch/energy`), 25 kW for a meter alone
+  (`energy-sensor/index`), since the last accepted value (plus a 0.5 kWh
+  slack). While a value is held, the last accepted one is sent again. A jump
+  is told at once; a drop only if it lasts about a minute (a driver that
+  wavers by 0.01 kWh tells nothing): the badge of the device then turns
+  orange with the jump or the drop and the kWh at stake, and the log says
+  so. Neither repetition, time, a later rise, saving the configuration nor a
+  reconnection accepts it: only the **Accept the held index** button of the
+  configuration does, in two clicks. The first one lists the held indexes
+  and the kWh that would be counted, accepting nothing; a second click
+  within 2 minutes takes exactly those (if the list changed meanwhile, it
+  only shows it again). Each index is taken at the value shown (plus what the
+  device may have used since). An accepted jump is counted at once as
+  consumption; an accepted drop bills nothing. A value back to normal ends
+  the hold. The hold is kept in `/data` across restarts; creating the device
+  (again) starts afresh. A driver reporting Wh is converted to kWh.
+
+  Two cases to know:
+
+  - **A meter reset** (`resetEnergy`, from Hubitat or the device): it is held
+    as a drop. Until you click, the last accepted value keeps being sent:
+    **the consumption between the reset and your acceptance is not
+    counted**. So accept the drop soon after the reset.
+  - **A driver that resets by itself** (after a power cut, an update): the
+    drop stays held too, with no time limit, until your click or until the
+    old value comes back. If the index then rises above the old value, that
+    is a jump, held in its turn.
+
 - **The event socket carries the events of every device of the hub**, not
   only those you authorized: the integration keeps the authorized ones and
   drops the rest. It needs no token.
