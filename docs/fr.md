@@ -155,7 +155,8 @@ l'atteint jamais.
   la configuration le fait, en deux clics. Le premier liste les index retenus
   et les kWh qui seraient comptés, sans rien accepter ; un second clic dans
   les 2 minutes prend exactement ces index-là (si la liste a changé
-  entre-temps, il ne fait que la montrer à nouveau). Chaque index est pris à
+  entre-temps, ou si une valeur retenue est sortie de ce qui a été montré, il ne
+  fait que la montrer à nouveau). Chaque index est pris à
   la valeur affichée (plus ce que l'appareil a pu consommer depuis). Un saut
   accepté est compté d'un coup comme consommation ; une baisse acceptée ne
   facture rien. Une valeur revenue à la normale lève la retenue. La retenue

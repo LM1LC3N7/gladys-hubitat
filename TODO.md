@@ -224,6 +224,18 @@ up to date at the end of every milestone.
     C3, E2 and F1 still click once (now only a listing), G1 is now held
     (10 kW for a plug), H1 compares with a plain `{}` (now without prototype):
     expected by these changes, not regressions.
+- **Guard, second refusal (2026-10-20, recheck of 68ec97b)**:
+  - R5: the first click keeps the `to` and the time of each hold listed; the
+    second accepts only if each value held now stays within it (a jump from
+    the `to` listed up to `to` + the margin of its guard since, a drop at
+    most `to` + that margin), otherwise it lists again. The reviewer's R5
+    asserts 5000 kWh billed; with "list again" nothing is billed (0 kWh,
+    never more than listed): the scenario's expectation contradicts the
+    rule asked, the rule was kept.
+  - R4: the fingerprint of a drop is `featureId:down:from` (the low value of
+    a reset meter moves with each reading); its bound comes from R5.
+  - R6: the keys of the log (`noteHold`) and of /data (`stateKeys`) are
+    `down:from` for a drop: one warning and one write per hold.
 - **Manifest version test**: `test/manifest.test.js` pinned `0.1.0`, which the
   release workflow had bumped to 0.1.1 (the test failed on `main`); it now
   checks the shape of the version only.

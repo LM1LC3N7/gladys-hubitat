@@ -24,7 +24,7 @@ import {
   createLogger,
 } from '@gladysassistant/integration-sdk';
 import { normalizeConfig } from './config.js';
-import { BUTTON_EVENTS, INDEX_MAX_KW, STATE, TIMINGS } from './constants.js';
+import { BUTTON_EVENTS, INDEX_MAX_KW, INDEX_SLACK_KWH, STATE, TIMINGS } from './constants.js';
 import { buildModel, emptyModel } from './devices.js';
 import { LiveError, openEventSocket } from './eventsocket.js';
 import { IndexGuard } from './guard.js';
@@ -43,6 +43,16 @@ import {
 import { createFileStore } from './store.js';
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+const HOUR = 3_600_000;
+
+/**
+ * The identity of a hold, for the log and /data: a jump by its threshold, a drop
+ * by where it dropped from only (the low value of a reset meter rises with each
+ * reading: one hold, not one per reading).
+ */
+const holdKey = (held) =>
+  held.direction === 'down' ? ['down', held.from] : ['up', held.from, held.threshold];
 
 /** The feature of a created device, from the devices Gladys gave (kept up to date by the SDK). */
 function createdFeature(devices, featureId) {
@@ -69,7 +79,7 @@ function lastValueOf(feature) {
 
 /** What /data keeps of a guard, compared to know when to write it: the hold apart. */
 function stateKeys({ last, held }) {
-  const hold = JSON.stringify(held && [held.direction, held.from, held.threshold]);
+  const hold = JSON.stringify(held && holdKey(held));
   return { hold, all: JSON.stringify([last, hold]) };
 }
 
@@ -675,7 +685,7 @@ export class HubitatApp {
   /** A hold is logged when it is shown or changes, and its end. */
   noteHold(featureId, guard) {
     const held = this.shownHold(featureId, guard);
-    const key = held ? `${held.direction}:${held.from}:${held.threshold}` : undefined;
+    const key = held ? holdKey(held).join(':') : undefined;
     if (key === this.holdLogged.get(featureId)) {
       return;
     }
@@ -799,9 +809,13 @@ export class HubitatApp {
    * The "Accept the held index" action, in two clicks. The first one only
    * lists the indexes held and the kWh at stake. A second one within
    * TIMINGS.acceptConfirm takes them, if the same holds are still there
-   * (featureId:direction:from:threshold); otherwise it is a first click
-   * again. Each one is taken as shown now (plus what the device may draw
-   * until its next value, src/guard.js), never anything else.
+   * (featureId:up:from:threshold for a jump, featureId:down:from for a drop,
+   * whose low value moves with each reading of a reset meter) and each value
+   * held now stays within what was listed: for a jump, from the `to` listed
+   * up to `to` + the margin of the guard since the listing; for a drop, at
+   * most `to` + that margin. Otherwise it is a first click again. Each one is
+   * then taken as shown (plus what the device may draw until its next
+   * value, src/guard.js), never anything else.
    */
   async acceptHeldIndex() {
     const holds = this.heldOf().sort((a, b) => (a.featureId < b.featureId ? -1 : 1));
@@ -811,7 +825,11 @@ export class HubitatApp {
     }
     const nameOf = (featureId) => createdFeature(this.gladys.devices, featureId)?.name ?? featureId;
     const fingerprint = holds
-      .map((h) => `${h.featureId}:${h.direction}:${h.from}:${h.threshold}`)
+      .map((h) =>
+        h.direction === 'down'
+          ? `${h.featureId}:down:${h.from}`
+          : `${h.featureId}:up:${h.from}:${h.threshold}`,
+      )
       .join('|');
     const pending = this.pendingAccept;
     const now = this.now();
@@ -819,9 +837,14 @@ export class HubitatApp {
       !pending ||
       pending.fingerprint !== fingerprint ||
       now - pending.at > TIMINGS.acceptConfirm ||
-      now < pending.at
+      now < pending.at ||
+      !holds.every((h) => this.withinListed(h, pending.listed.get(h.featureId), now))
     ) {
-      this.pendingAccept = { fingerprint, at: now };
+      this.pendingAccept = {
+        fingerprint,
+        at: now,
+        listed: new Map(holds.map((h) => [h.featureId, { to: h.to, at: now }])),
+      };
       return T.accept.confirm(holds.map((h) => ({ ...h, name: nameOf(h.featureId) })));
     }
     this.pendingAccept = undefined;
@@ -846,6 +869,20 @@ export class HubitatApp {
       }
     }
     return T.accept.done(accepted);
+  }
+
+  /**
+   * Whether a hold, at its second click, is still what the first one
+   * listed (`{ to, at }`): a jump between `to` and `to` + the margin of its
+   * guard since then, a drop at most `to` + that margin.
+   */
+  withinListed(hold, listed, now) {
+    const guard = this.indexGuards.get(hold.featureId);
+    if (!listed || !guard) {
+      return false;
+    }
+    const top = listed.to + (guard.maxKw * Math.max(0, now - listed.at)) / HOUR + INDEX_SLACK_KWH;
+    return hold.direction === 'up' ? hold.to >= listed.to && hold.to <= top : hold.to <= top;
   }
 
   /** The hub device id of an energy feature. */

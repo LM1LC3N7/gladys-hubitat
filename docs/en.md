@@ -139,8 +139,8 @@ it.
   reconnection accepts it: only the **Accept the held index** button of the
   configuration does, in two clicks. The first one lists the held indexes
   and the kWh that would be counted, accepting nothing; a second click
-  within 2 minutes takes exactly those (if the list changed meanwhile, it
-  only shows it again). Each index is taken at the value shown (plus what the
+  within 2 minutes takes exactly those (if the list changed meanwhile, or a held value moved beyond what was shown,
+  it only shows it again). Each index is taken at the value shown (plus what the
   device may have used since). An accepted jump is counted at once as
   consumption; an accepted drop bills nothing. A value back to normal ends
   the hold. The hold is kept in `/data` across restarts; creating the device

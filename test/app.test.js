@@ -954,6 +954,86 @@ test('M1: a hold that changes between the two clicks is listed again, never take
   assert.equal(gladys.fake.lastState(energy), 312.5);
 });
 
+test('R5: a jump that grows between the two clicks is listed again, never counted beyond the listing', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  box.emit('104', 'energy', 5312.4);
+  await tick(10_000);
+  const action = async () => (await gladys.fake.action(ACTIONS.ACCEPT_HELD, {})).data.message;
+  assert.match((await action()).en, /^Nothing accepted yet.*5000 kWh/);
+  // A bigger glitch, above the threshold (same fingerprint): beyond what was listed.
+  box.emit('104', 'energy', 9312.4);
+  await tick(10_000);
+  const second = await action();
+  assert.match(second.en, /^Nothing accepted yet.*9000 kWh/);
+  await tick(10_000);
+  assert.ok(!statesOf(gladys, energy).some((s) => s.state > 312.4), 'nothing taken');
+  // Within the listing (+ the margin of 10 kW since): taken.
+  box.emit('104', 'energy', 9312.41);
+  await tick(10_000);
+  assert.match((await action()).en, /^Accepted .*9000\.01 kWh will be counted/);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 9312.41);
+  // Below the value listed: listed again too.
+  box.emit('104', 'energy', 20_000);
+  await tick(10_000);
+  await action();
+  box.emit('104', 'energy', 19_000);
+  await tick(10_000);
+  assert.match((await action()).en, /^Nothing accepted yet/);
+});
+
+test('R4: a reset meter that reports every 10 s: the second click takes the drop', async (t) => {
+  const { gladys, box, tick } = await setup(t, CONFIG, (hub) => hub.devices.push(meterDevice()));
+  const meter = await created(gladys, 'Compteur maison (Garage)');
+  const energy = `${meter.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  let v = 0.01;
+  box.emit('150', 'energy', v); // resetEnergy, then it counts again
+  for (let i = 0; i < 12; i += 1) {
+    v = Number((v + 0.01).toFixed(2));
+    box.emit('150', 'energy', v);
+    await tick(10_000);
+  }
+  const action = async () => (await gladys.fake.action(ACTIONS.ACCEPT_HELD, {})).data.message;
+  assert.match((await action()).en, /^Nothing accepted yet/);
+  v = Number((v + 0.01).toFixed(2));
+  box.emit('150', 'energy', v); // one reading between the two clicks
+  await tick(10_000);
+  assert.match((await action()).en, /^Accepted \(1 index\).*0 kWh will be counted/);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), v);
+});
+
+test('R6: a lasting drop whose low value rises: one warning and one /data write for the hold', async (t) => {
+  const store = createMemoryStore();
+  let saves = 0;
+  const save = store.save.bind(store);
+  store.save = async (data) => {
+    saves += 1;
+    return save(data);
+  };
+  const logger = linesLogger();
+  const { gladys, box, tick } = await setup(t, CONFIG, (hub) => hub.devices.push(meterDevice()), {
+    store,
+    logger,
+  });
+  await created(gladys, 'Compteur maison (Garage)');
+  await tick(TIMINGS.flushInterval);
+  const before = saves;
+  let v = 0.01;
+  for (let i = 0; i < 60; i += 1) {
+    box.emit('150', 'energy', v);
+    v = Number((v + 0.01).toFixed(2));
+    await tick(10_000);
+  }
+  const warns = logger.lines.filter((l) => l.startsWith('warn') && /held back/.test(l)).length;
+  assert.equal(warns, 1, 'one warning for the hold');
+  assert.ok(saves - before <= 2, `${saves - before} writes of /data for 60 readings`);
+});
+
 test('F1: the plausible power depends on the type: 10 kW for a plug, 25 kW for a meter', async (t) => {
   const { gladys, app, box, tick } = await setup(t, CONFIG, (hub) =>
     hub.devices.push(meterDevice()),
