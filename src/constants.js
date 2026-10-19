@@ -6,6 +6,26 @@
 /** Manifest `actions` keys. */
 export const ACTIONS = {
   TEST: 'test_connection',
+  ACCEPT_HELD: 'accept_held_index',
+};
+
+// --- Plausibility of an energy index (the one Gladys bills), src/guard.js ----------
+/** One Hubitat device (a plug, a module, a meter) never draws more than this on average. */
+export const INDEX_MAX_KW = 25;
+/** kWh always accepted on top of INDEX_MAX_KW × hours (rounding, a late read). */
+export const INDEX_SLACK_KWH = 0.5;
+
+/** The state of the index guards kept in /data (src/store.js). */
+export const STATE_FILE = '/data/hubitat-state.json';
+export const STATE = {
+  /** Index guards kept (one per energy feature of a created device). */
+  maxEntries: 2000,
+  /** Size of the file read back (bytes). */
+  maxBytes: 1024 * 1024,
+  /** Longest feature id kept. */
+  maxKeyLength: 300,
+  /** A reference that only rose is written at most this often (a hold, at once). */
+  saveEvery: 60_000,
 };
 
 /** Languages of the feature names (manifest `language` options). */

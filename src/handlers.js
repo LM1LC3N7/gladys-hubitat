@@ -9,7 +9,8 @@ export function registerHandlers(gladys, app, logger) {
   // Discovery: the devices are published at each read; Scan reads them again.
   gladys.onScanRequest(() => app.rescan());
   gladys.onDeviceCreated((device) => app.deviceCreated(device));
-  gladys.onDeviceUpdated((device) => app.deviceCreated(device));
+  // An update (new features) keeps the guards of the energy indexes; only a creation resets them.
+  gladys.onDeviceUpdated((device) => app.deviceUpdated(device));
   gladys.onDeviceDeleted((device) => app.deviceDeleted(device));
 
   // Commands.
@@ -17,6 +18,8 @@ export function registerHandlers(gladys, app, logger) {
 
   // Configuration screen button.
   gladys.onAction(ACTIONS.TEST, () => app.testConnection());
+  // Takes the energy indexes held back, as shown; nothing else ever accepts them.
+  gladys.onAction(ACTIONS.ACCEPT_HELD, () => app.acceptHeldIndex());
 
   // Configuration changed by the user.
   gladys.onConfigUpdated((config) => app.configUpdated(config));

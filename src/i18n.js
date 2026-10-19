@@ -52,6 +52,15 @@ export const word = (pair, language = 'fr') => pair?.[language] ?? pair?.en ?? '
 const trim = (text) =>
   text.length > LIMITS.badgeMessage ? `${text.slice(0, LIMITS.badgeMessage - 1)}…` : text;
 
+/** kWh shown: three decimals at most. */
+const kwh = (n) => Math.round(n * 1000) / 1000;
+
+/** The kWh an accepted hold counts: the jump, 0 for a drop. */
+const counted = ({ direction, from, to }) => (direction === 'up' ? kwh(to - from) : 0);
+
+/** Holds listed in the answer of the action (the others are counted, not named). */
+const LISTED = 5;
+
 /** Why the hub is unreachable, with the hint that fits. */
 function unreachable(err) {
   const reason = err?.message ?? 'unknown error';
@@ -225,6 +234,49 @@ export const T = {
     unconfirmed: {
       en: 'State not confirmed after the last command: the device could not be read back.',
       fr: "État non confirmé après la dernière commande : l'appareil n'a pas pu être relu.",
+    },
+    /** An energy index held back (src/guard.js). */
+    held: ({ direction, from, to }) =>
+      direction === 'down'
+        ? {
+            en: trim(
+              `Energy index held back: it dropped from ${kwh(from)} to ${kwh(to)} kWh. "Accept the held index" (configuration) takes it, 0 kWh billed.`,
+            ),
+            fr: trim(
+              `Index d'énergie retenu : baisse de ${kwh(from)} à ${kwh(to)} kWh. « Accepter l'index retenu » (configuration) la prend, 0 kWh facturé.`,
+            ),
+          }
+        : {
+            en: trim(
+              `Energy index held back: it jumped from ${kwh(from)} to ${kwh(to)} kWh. "Accept the held index" (configuration) would count ${kwh(to - from)} kWh at once.`,
+            ),
+            fr: trim(
+              `Index d'énergie retenu : saut de ${kwh(from)} à ${kwh(to)} kWh. « Accepter l'index retenu » (configuration) compterait ${kwh(to - from)} kWh d'un coup.`,
+            ),
+          },
+  },
+  /** The answers of the "Accept the held index" action. */
+  accept: {
+    nothing: {
+      en: 'No energy index is held back: nothing to accept.',
+      fr: "Aucun index d'énergie n'est retenu : rien à accepter.",
+    },
+    /** @param {Array<{ name, direction, from, to }>} accepted */
+    done(accepted) {
+      const total = kwh(accepted.reduce((sum, a) => sum + counted(a), 0));
+      const shown = accepted.slice(0, LISTED);
+      const more = accepted.length - shown.length;
+      const line = (a) => `${a.name}: ${kwh(a.from)} → ${kwh(a.to)} kWh (${counted(a)} kWh)`;
+      return {
+        en:
+          `Accepted (${plural(accepted.length, 'index', 'indexes')}): ${shown.map(line).join('; ')}` +
+          (more > 0 ? `; and ${more} more` : '') +
+          `. ${total} kWh will be counted at once as consumption (plus what the devices use meanwhile); a drop bills nothing. A different value stays held.`,
+        fr:
+          `Accepté (${plural(accepted.length, 'index', 'index')}) : ${shown.map(line).join(' ; ')}` +
+          (more > 0 ? ` ; et ${more} autre${more === 1 ? '' : 's'}` : '') +
+          `. ${total} kWh seront comptés d'un coup comme consommation (plus ce que les appareils consomment d'ici là) ; une baisse ne facture rien. Une autre valeur reste retenue.`,
+      };
     },
   },
   /** Refusals of a command, by key. */

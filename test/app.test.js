@@ -16,16 +16,41 @@ import { HubitatError } from '../src/hubitat.js';
 import { registerHandlers } from '../src/handlers.js';
 import { T } from '../src/i18n.js';
 import { hsToRgbInt } from '../src/mapping.js';
+import { createMemoryStore } from '../src/store.js';
 import { CONFIG, HUB_URL, fakeHub, settle } from './helpers/fakeHub.js';
 
 const OFFERED = 16; // 17 authorized devices, the speaker has nothing to offer
 
-async function setup(t, config = CONFIG, prepare = () => {}, { now } = {}) {
+/** A logger that keeps its lines (the energy guard tells its holds there). */
+function linesLogger() {
+  const lines = [];
+  const log = (level) => (message) => lines.push(`${level} ${message}`);
+  return {
+    lines,
+    debug: log('debug'),
+    info: log('info'),
+    warn: log('warn'),
+    error: log('error'),
+  };
+}
+
+async function setup(
+  t,
+  config = CONFIG,
+  prepare = () => {},
+  {
+    now,
+    store = createMemoryStore(),
+    devices = [],
+    logger = createLogger({ level: 'silent' }),
+    at = '2026-10-17T08:00:00.000Z',
+  } = {},
+) {
   t.mock.timers.enable({
     apis: ['setTimeout', 'setInterval', 'Date'],
-    now: Date.parse('2026-10-17T08:00:00.000Z'),
+    now: Date.parse(at),
   });
-  const gladys = createFakeGladys({ config });
+  const gladys = createFakeGladys({ config, devices });
   const box = fakeHub();
   prepare(box);
   const app = new HubitatApp({
@@ -33,7 +58,8 @@ async function setup(t, config = CONFIG, prepare = () => {}, { now } = {}) {
     connect: box.connect,
     live: box.openLive,
     now: now ?? (() => Date.now()),
-    logger: createLogger({ level: 'silent' }),
+    logger,
+    store,
   });
   registerHandlers(gladys, app);
   t.after(() => app.stop());
@@ -44,7 +70,7 @@ async function setup(t, config = CONFIG, prepare = () => {}, { now } = {}) {
   await gladys.connect();
   await settle();
   await tick(0); // the read that follows the opening of the socket
-  return { gladys, app, box, tick };
+  return { gladys, app, box, tick, store, logger };
 }
 
 const deviceNamed = (gladys, name) => gladys.fake.discoveredDevices.find((d) => d.name === name);
@@ -672,7 +698,7 @@ test('S9b: an index read at 0 twice, then back: no false consumption', async (t)
   );
 });
 
-test('an energy index that drops is held; a rise above the low value is a reset', async (t) => {
+test('an energy index that drops is held, never taken by a later rise; only the action takes it', async (t) => {
   const { gladys, box, tick } = await setup(t);
   const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
   const energy = `${plug.external_id}:energy`;
@@ -685,9 +711,163 @@ test('an energy index that drops is held; a rise above the low value is a reset'
   await tick(10_000);
   assert.equal(gladys.fake.lastState(energy), 312.9);
   box.emit('104', 'energy', 0.2); // reset by the user
-  box.emit('104', 'energy', 0.3);
+  box.emit('104', 'energy', 0.3); // a rise above the low value: still held
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 312.9);
+  assert.equal(lastTransport(gladys, plug).degraded, true);
+  assert.equal(
+    lastTransport(gladys, plug).message.fr,
+    T.badge.held({ direction: 'down', from: 312.9, to: 0.3 }).fr,
+  );
+  const answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, {});
+  assert.match(answer.data.message.en, /312\.9 → 0\.3 kWh \(0 kWh\)/);
+  assert.match(answer.data.message.fr, /0 kWh seront comptés/);
   await tick(10_000);
   assert.equal(gladys.fake.lastState(energy), 0.3);
+  box.emit('104', 'energy', 0.4);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 0.4);
+  assert.equal(lastTransport(gladys, plug).degraded, undefined);
+});
+
+test('a jump of an energy index is held: last value sent again, badge, log; only the action takes it', async (t) => {
+  const logger = linesLogger();
+  const { gladys, app, box, tick } = await setup(t, CONFIG, () => {}, { logger });
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  box.emit('104', 'energy', 5312.4); // +5000 kWh in a second: a glitch of the driver
+  await tick(10_000);
+  // Repeated for hours: never confirmed by repetition nor by time.
+  for (let i = 1; i <= 12; i += 1) {
+    box.emit('104', 'energy', Number((5312.4 + i * 0.01).toFixed(2)));
+    await tick(TIMINGS.resync);
+  }
+  assert.deepEqual(
+    [...new Set(statesOf(gladys, energy).map((s) => s.state))],
+    [312.4],
+    'only the last accepted value, never the jump nor 0',
+  );
+  const badge = lastTransport(gladys, plug);
+  assert.equal(badge.transport, DEVICE_TRANSPORTS.LOCAL);
+  assert.equal(badge.degraded, true);
+  assert.match(badge.message.fr, /saut de 312\.4 à 5312\.52 kWh/);
+  assert.match(badge.message.en, /would count 5000\.12 kWh at once/);
+  assert.ok(badge.message.fr.length <= 200);
+  assert.equal(logger.lines.filter((l) => /energy index jump .* held back/.test(l)).length, 1);
+  // Neither a save of the form nor a reconnection to Gladys accepts it.
+  await gladys.fake.configUpdated(CONFIG);
+  await settle();
+  await app.resume(CONFIG);
+  await tick(TIMINGS.resync);
+  assert.ok(!statesOf(gladys, energy).some((s) => s.state > 312.4));
+  const answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, {});
+  assert.match(answer.data.message.fr, /312\.4 → 5312\.52 kWh \(5000\.12 kWh\)/);
+  assert.match(answer.data.message.fr, /5000\.12 kWh seront comptés d'un coup/);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 5312.52);
+  assert.equal(lastTransport(gladys, plug).degraded, undefined);
+  assert.ok(logger.lines.some((l) => /accepted by the user/.test(l)));
+  assert.equal(
+    (await gladys.fake.action(ACTIONS.ACCEPT_HELD, {})).data.message.en,
+    T.accept.nothing.en,
+  );
+  // An old acceptance never covers a new jump.
+  box.emit('104', 'energy', 9000);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 5312.52);
+});
+
+test('an accepted jump never takes another value: held again', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  box.emit('104', 'energy', 1312.4);
+  await tick(10_000);
+  const answer = await gladys.fake.action(ACTIONS.ACCEPT_HELD, {});
+  assert.match(answer.data.message.en, /1000 kWh will be counted/);
+  // Taken at once from the value read: 1312.4. A later 9000 is not what was accepted.
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 1312.4);
+  box.emit('104', 'energy', 9000);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 1312.4);
+  assert.equal(lastTransport(gladys, plug).degraded, true);
+});
+
+test('a held index survives a restart (/data), dated at its loading; Gladys gives the reference', async (t) => {
+  const store = createMemoryStore();
+  const first = await setup(t, CONFIG, () => {}, { store });
+  const plug = await created(first.gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await first.tick(TIMINGS.flushInterval);
+  first.box.emit('104', 'energy', 5312.4);
+  await first.tick(10_000);
+  first.app.stop();
+  await settle();
+  assert.equal(store.data[energy].held.direction, 'up');
+  assert.equal(store.data[energy].held.from, 312.4);
+  assert.deepEqual(Object.keys(store.data), [energy], 'only the created energy features');
+  t.mock.timers.reset();
+
+  // A new container, 5 days later; Gladys holds 312.4 (last_value).
+  const device = structuredClone(plug);
+  const feature = device.features.find((f) => f.external_id === energy);
+  feature.last_value = 312.4;
+  feature.last_value_changed = '2026-10-17T08:00:00.000Z';
+  const second = await setup(t, CONFIG, (box) => box.silently('104', 'energy', 5312.5), {
+    store,
+    devices: [device],
+    at: '2026-10-22T08:00:00.000Z',
+  });
+  await second.tick(TIMINGS.flushInterval);
+  const guard = second.app.indexGuards.get(energy);
+  assert.equal(guard.held.direction, 'up');
+  assert.ok(guard.held.at >= Date.parse('2026-10-22T08:00:00.000Z'), 'dated at the loading');
+  assert.ok(!statesOf(second.gladys, energy).some((s) => s.state > 312.4));
+  assert.equal(lastTransport(second.gladys, device).degraded, true);
+  await second.gladys.fake.action(ACTIONS.ACCEPT_HELD, {});
+  await second.tick(10_000);
+  assert.equal(second.gladys.fake.lastState(energy), 5312.5);
+});
+
+test('a device created again starts a new guard: nothing held from the deleted one', async (t) => {
+  const store = createMemoryStore();
+  const { gladys, app, box, tick } = await setup(t, CONFIG, () => {}, { store });
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  box.emit('104', 'energy', 3.1);
+  await tick(10_000);
+  assert.equal(app.indexGuards.get(energy).held.direction, 'down');
+  await gladys.fake.deviceDeleted(plug);
+  // An update keeps the guard (only a creation resets it).
+  await gladys.fake.deviceCreated(plug);
+  await tick(TIMINGS.flushInterval);
+  assert.equal(app.indexGuards.get(energy).held, undefined);
+  assert.equal(store.data[energy]?.held ?? null, null);
+  assert.equal(gladys.fake.lastState(energy), 3.1, 'the first value of the new device');
+  box.emit('104', 'energy', 0);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 3.1, 'never 0');
+  box.emit('104', 'energy', 3000);
+  await tick(10_000);
+  await gladys.fake.deviceUpdated(plug);
+  await tick(TIMINGS.flushInterval);
+  assert.equal(app.indexGuards.get(energy).held.direction, 'up', 'an update accepts nothing');
+  assert.equal(gladys.fake.lastState(energy), 3.1);
+});
+
+test('an index read at 0 when the device is created is never sent', async (t) => {
+  const { gladys, box, tick } = await setup(t, CONFIG, (hub) => hub.silently('104', 'energy', 0));
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  assert.equal(statesOf(gladys, energy).length, 0);
+  box.emit('104', 'energy', 312.6);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 312.6);
 });
 
 test('a 429 pause covers the scan, the test button and a reconnection to Gladys', async (t) => {

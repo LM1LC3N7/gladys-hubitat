@@ -39,6 +39,8 @@ src/records.js                    hub answers and events -> records (pure)
 src/mapping.js                    one record -> features, readers, writers (pure)
 src/devices.js                    records -> Gladys devices + routing tables (pure)
 src/publisher.js                  states within 300/min, sensor throttling, button presses
+src/guard.js                      IndexGuard of P1 Monitor: energy index jumps and drops held (pure)
+src/store.js                      /data/hubitat-state.json: the guards across restarts (bounded)
 src/config.js                     DEFAULTS (mirrors the manifest defaults) + normalization
 src/i18n.js                       texts in English and French
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...

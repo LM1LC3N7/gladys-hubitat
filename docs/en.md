@@ -126,11 +126,20 @@ it.
   contact, motion, lock, door…) that no event told, or when the socket said
   nothing for 30 minutes, the socket is opened again at once; the badges only
   turn orange if that reopening fails.
-- **Energy**: the energy index only goes up. A lower reading is held; it is
-  taken only when a later reading rises above that low value (the meter was
-  reset and counts again). The same low value read again stays held, so an
-  index read at 0 then back to normal makes no false consumption. A driver
-  reporting Wh is converted to kWh.
+- **Energy**: Gladys counts every rise of an energy index in full in the
+  Energy tab. So the integration never publishes 0, and holds back any
+  abnormal value: a drop, or a jump of more than 25 kW on average since the
+  last accepted value (plus a 0.5 kWh slack). While a value is held, the last
+  accepted one is sent again, the badge of the device turns orange with the
+  jump or the drop and the kWh at stake, and the log says so. Neither
+  repetition, time, a later rise, saving the configuration nor a reconnection
+  accepts it: only the **Accept the held index** button of the configuration
+  does, and it takes exactly the value shown (plus what the device may have
+  used since), answering with the kWh counted. An accepted jump is counted at
+  once as consumption; an accepted drop (a meter reset by `resetEnergy`)
+  bills nothing. A value back to normal ends the hold. The hold is kept in
+  `/data` across restarts; creating the device (again) starts afresh. A
+  driver reporting Wh is converted to kWh.
 - **The event socket carries the events of every device of the hub**, not
   only those you authorized: the integration keeps the authorized ones and
   drops the rest. It needs no token.

@@ -20,9 +20,10 @@
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { normalizeConfig } from './config.js';
-import { BUTTON_EVENTS, TIMINGS } from './constants.js';
+import { BUTTON_EVENTS, INDEX_MAX_KW, STATE, TIMINGS } from './constants.js';
 import { buildModel, emptyModel } from './devices.js';
 import { LiveError, openEventSocket } from './eventsocket.js';
+import { IndexGuard } from './guard.js';
 import { HubitatError, createClient } from './hubitat.js';
 import { T, scaleMismatch, word } from './i18n.js';
 import { BUTTON_STATES, BUTTON_STATUS, scaleOf } from './mapping.js';
@@ -35,8 +36,39 @@ import {
   stringAttr,
   withAttribute,
 } from './records.js';
+import { createFileStore } from './store.js';
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+/** The feature of a created device, from the devices Gladys gave (kept up to date by the SDK). */
+function createdFeature(devices, featureId) {
+  for (const device of devices ?? []) {
+    const feature = (device.features ?? []).find((f) => f.external_id === featureId);
+    if (feature) {
+      return feature;
+    }
+  }
+  return undefined;
+}
+
+/** The index Gladys already holds for a feature (`last_value`, `last_value_changed`), when it says so. */
+function lastValueOf(feature) {
+  const value = Number(feature?.last_value);
+  const at = Date.parse(feature?.last_value_changed ?? '');
+  return feature?.last_value !== null &&
+    feature?.last_value !== undefined &&
+    Number.isFinite(value) &&
+    Number.isFinite(at)
+    ? { value, at }
+    : undefined;
+}
+
+/** What /data keeps of a guard, compared to know when to write it: the hold apart. */
+function stateKeys(guard) {
+  const { last, held } = guard.state();
+  const hold = JSON.stringify(held && [held.direction, held.from, held.threshold]);
+  return { hold, all: JSON.stringify([last, hold]) };
+}
 
 /** Lock and garage door states, normalized: 1 locked / open, 0 unlocked / closed. */
 const LOCK_KNOWN = { locked: 1, unlocked: 0, 'unlocked with timeout': 0 };
@@ -82,8 +114,11 @@ export class HubitatApp {
     WebSocket = globalThis.WebSocket,
     now = Date.now,
     timers = globalThis,
+    store = createFileStore(),
   }) {
     this.gladys = gladys;
+    /** /data: per energy feature, the index reference and the value held, across restarts. */
+    this.store = store;
     this.logger = logger;
     this.connect = connect;
     this.openLive = live;
@@ -122,8 +157,23 @@ export class HubitatApp {
     this.unconfirmed = new Set();
     /** "<device>:<button>" held and not released yet */
     this.held = new Set();
-    /** meter feature id -> { value, dropped } (energy index filter) */
-    this.meters = new Map();
+    /**
+     * energy feature id -> IndexGuard (src/guard.js), built from Gladys and
+     * /data when the feature is created. Kept across restarts of the app (a
+     * save of the form, a reconnection): neither accepts anything.
+     */
+    this.indexGuards = new Map();
+    /** energy feature id -> the last value read from the hub (not always the one sent) */
+    this.indexesRead = new Map();
+    /** The state read back from /data (once), then kept up to date. */
+    this.savedState = undefined;
+    /** energy feature id -> { hold, all } last written to /data */
+    this.savedKeys = new Map();
+    /** energy feature id -> the hold last logged */
+    this.holdLogged = new Map();
+    this.stateDirty = false;
+    this.stateTimer = undefined;
+    this.stateWrite = Promise.resolve();
     /** the scale the hub's events gave ('C' | 'F'), and whether it differs from the option */
     this.hubScale = undefined;
     this.scaleMismatch = false;
@@ -203,7 +253,13 @@ export class HubitatApp {
   stop() {
     this.generation += 1;
     this.running = false;
-    for (const timer of [this.timer, this.modelTimer, this.liveTimer, ...this.readBackTimers]) {
+    for (const timer of [
+      this.timer,
+      this.modelTimer,
+      this.liveTimer,
+      this.stateTimer,
+      ...this.readBackTimers,
+    ]) {
       this.timers.clearTimeout(timer);
     }
     for (const guard of this.guards.values()) {
@@ -214,6 +270,11 @@ export class HubitatApp {
     this.timer = undefined;
     this.modelTimer = undefined;
     this.liveTimer = undefined;
+    if (this.stateTimer !== undefined) {
+      // A reference not written yet: written now (a hold always is at once).
+      this.stateTimer = undefined;
+      this.background(this.writeState());
+    }
     this.publisher.stop();
     this.closeLive('off');
     this.client?.close?.();
@@ -486,7 +547,9 @@ export class HubitatApp {
         this.warnOnce(`read:${reader.featureId}`, `${reader.featureId}: ${err.message}`);
         continue;
       }
-      if (value && (!reader.meter || this.meterOk(reader.featureId, value))) {
+      if (value && reader.meter) {
+        this.recordIndex(reader.featureId, value);
+      } else if (value) {
         this.record(reader.featureId, value);
       }
     }
@@ -494,25 +557,201 @@ export class HubitatApp {
     this.publishTransportOf(record.id);
   }
 
+  // --- Energy indexes (src/guard.js) ---------------------------------------------------
+
   /**
-   * An energy index only goes up. A lower reading is held (a glitch of the
-   * driver); the drop is taken only when a later reading is strictly above the
-   * low value held (the meter was reset and counts again). The same low value
-   * read again stays held: no false consumption when the index comes back.
+   * An energy index, through the guard of its feature: a plausible value is
+   * sent; while a jump or a drop is held, the last accepted value is sent
+   * again (no delta for the core); 0, an invalid value or another source is
+   * never sent. A feature not created yet only keeps the value read: it meets
+   * a new guard when the user creates the device.
    */
-  meterOk(featureId, { state }) {
-    const last = this.meters.get(featureId);
-    if (last && state < last.value) {
-      if (last.low !== undefined && state > last.low) {
-        this.meters.set(featureId, { value: state });
-        return true;
-      }
-      last.low = state;
-      this.warnOnce(`drop:${featureId}`, `${featureId}: energy index went down, held`);
-      return false;
+  recordIndex(featureId, value) {
+    this.indexesRead.set(featureId, value);
+    if (!this.created.has(featureId)) {
+      return;
     }
-    this.meters.set(featureId, { value: state });
-    return true;
+    const guard = this.indexGuardOf(featureId);
+    const taken = guard.accept(value.state, this.now());
+    this.noteHold(featureId, guard);
+    this.saveGuard(featureId, guard);
+    if (taken) {
+      this.record(featureId, { state: value.state });
+    } else if (guard.held && guard.last) {
+      this.record(featureId, { state: guard.last.value });
+    }
+  }
+
+  /** The guard of a created energy feature, from Gladys (`last_value`) and /data. */
+  indexGuardOf(featureId) {
+    let guard = this.indexGuards.get(featureId);
+    if (!guard) {
+      const saved = this.loadState()[featureId];
+      const feature = createdFeature(this.gladys.devices, featureId);
+      guard = new IndexGuard(lastValueOf(feature), saved, this.now(), INDEX_MAX_KW);
+      this.indexGuards.set(featureId, guard);
+      this.savedKeys.set(featureId, stateKeys(new IndexGuard(undefined, saved)));
+    }
+    return guard;
+  }
+
+  /** A hold is logged when it starts or changes, and its end. */
+  noteHold(featureId, guard) {
+    const held = guard.held;
+    const key = held ? `${held.direction}:${held.from}:${held.threshold}` : undefined;
+    if (key === this.holdLogged.get(featureId)) {
+      return;
+    }
+    if (held) {
+      this.holdLogged.set(featureId, key);
+      this.logger.warn(
+        `${featureId}: energy index ${held.direction === 'down' ? 'drop' : 'jump'} from ${held.from} to ${held.to} kWh held back, the last accepted value is sent again; the "Accept the held index" action takes it`,
+      );
+    } else {
+      this.holdLogged.delete(featureId);
+      this.logger.info(`${featureId}: energy index no longer held`);
+    }
+  }
+
+  /** The held energy indexes of a Gladys device: [{ featureId, direction, from, to }]. */
+  heldOf(deviceId) {
+    const held = [];
+    for (const [featureId, guard] of this.indexGuards) {
+      if (guard.held && featureId.startsWith(`${deviceId}:`) && this.created.has(featureId)) {
+        const { direction, from, to } = guard.held;
+        held.push({ featureId, direction, from, to });
+      }
+    }
+    return held;
+  }
+
+  loadState() {
+    this.savedState ??= this.store.load();
+    return this.savedState;
+  }
+
+  /**
+   * Keeps the guard in /data: at once when its hold starts, changes or ends;
+   * a reference that only rose at most every STATE.saveEvery (Gladys holds it
+   * too, as `last_value`).
+   */
+  saveGuard(featureId, guard) {
+    const keys = stateKeys(guard);
+    const before = this.savedKeys.get(featureId);
+    if (before?.all === keys.all) {
+      return;
+    }
+    this.savedKeys.set(featureId, keys);
+    this.loadState()[featureId] = guard.state();
+    this.stateDirty = true;
+    if (before?.hold !== keys.hold) {
+      this.timers.clearTimeout(this.stateTimer);
+      this.stateTimer = undefined;
+      this.background(this.writeState());
+    } else if (this.stateTimer === undefined) {
+      this.stateTimer = this.timers.setTimeout(() => {
+        this.stateTimer = undefined;
+        this.background(this.writeState());
+      }, STATE.saveEvery);
+    }
+  }
+
+  /** Writes /data, one write at a time: the guards of the created features only, bounded. */
+  writeState() {
+    this.stateWrite = this.stateWrite.then(async () => {
+      if (!this.stateDirty) {
+        return;
+      }
+      this.stateDirty = false;
+      const data = {};
+      let count = 0;
+      for (const [featureId, state] of Object.entries(this.loadState())) {
+        if (count >= STATE.maxEntries) {
+          break;
+        }
+        if (this.created.has(featureId) && featureId.length <= STATE.maxKeyLength) {
+          data[featureId] = state;
+          count += 1;
+        }
+      }
+      try {
+        await this.store.save(data);
+      } catch (err) {
+        this.stateDirty = true;
+        this.logger.warn(`Saving the energy index state in /data failed (${err?.code ?? 'error'})`);
+      }
+    });
+    return this.stateWrite;
+  }
+
+  /**
+   * A device just created: its energy features start a new guard (no
+   * reference, nothing held from a deleted device of the same id).
+   */
+  async resetGuards(deviceId) {
+    const owned = (id) => id.startsWith(`${deviceId}:`);
+    let removed = false;
+    for (const featureId of Object.keys(this.loadState())) {
+      if (owned(featureId)) {
+        delete this.savedState[featureId];
+        removed = true;
+      }
+    }
+    for (const map of [this.indexGuards, this.savedKeys, this.holdLogged]) {
+      for (const featureId of [...map.keys()].filter(owned)) {
+        map.delete(featureId);
+      }
+    }
+    if (removed) {
+      this.stateDirty = true;
+      await this.writeState();
+    }
+  }
+
+  /**
+   * The "Accept the held index" action: takes each index held as shown now
+   * (plus what the device may draw until its next value, src/guard.js), never
+   * anything else. Answers with the kWh that will be counted.
+   */
+  async acceptHeldIndex() {
+    const accepted = [];
+    for (const [featureId, guard] of this.indexGuards) {
+      if (!this.created.has(featureId)) {
+        continue;
+      }
+      const taken = guard.acceptHeld();
+      if (taken) {
+        const name = createdFeature(this.gladys.devices, featureId)?.name ?? featureId;
+        accepted.push({ featureId, name, ...taken });
+      }
+    }
+    if (accepted.length === 0) {
+      return T.accept.nothing;
+    }
+    for (const { featureId, direction, from, to } of accepted) {
+      this.logger.info(
+        `${featureId}: energy index ${direction === 'down' ? 'drop' : 'jump'} from ${from} to ${to} kWh accepted by the user`,
+      );
+    }
+    // Taken now from the values read (the hub sends the next ones anyway).
+    const owners = new Set(accepted.map(({ featureId }) => this.ownerOfIndex(featureId)));
+    for (const id of owners) {
+      const record = this.records.get(id);
+      if (record) {
+        this.applyRecord(record);
+      }
+    }
+    return T.accept.done(accepted);
+  }
+
+  /** The hub device id of an energy feature. */
+  ownerOfIndex(featureId) {
+    for (const [id, readers] of this.model.readers) {
+      if (readers.some((r) => r.featureId === featureId)) {
+        return id;
+      }
+    }
+    return undefined;
   }
 
   /** Keeps the value, and sends it when the device exists in Gladys. */
@@ -756,6 +995,11 @@ export class HubitatApp {
     if (stringAttr(record, 'healthStatus') === 'offline') {
       return { transport: DEVICE_TRANSPORTS.UNREACHABLE, degraded: true, message: T.badge.offline };
     }
+    const held = this.heldOf(deviceId);
+    if (held.length > 0) {
+      // An energy index held back: the user must see it to accept it (or not).
+      return { transport: DEVICE_TRANSPORTS.LOCAL, degraded: true, message: T.badge.held(held[0]) };
+    }
     if (this.unconfirmed.has(id)) {
       return { transport: DEVICE_TRANSPORTS.LOCAL, degraded: true, message: T.badge.unconfirmed };
     }
@@ -818,10 +1062,35 @@ export class HubitatApp {
     );
   }
 
+  /** A device created by the user: its energy indexes start a new guard, its values right away. */
   async deviceCreated(device) {
+    if (device?.external_id) {
+      await this.resetGuards(device.external_id);
+    }
+    await this.deviceUpdated(device);
+  }
+
+  /** A device created or updated (new features): the values known, sent. */
+  async deviceUpdated(device) {
     this.refreshCreated();
     this.transports.delete(device?.external_id);
+    const meters = new Set();
+    for (const readers of this.model.readers.values()) {
+      for (const reader of readers) {
+        if (reader.meter) {
+          meters.add(reader.featureId);
+        }
+      }
+    }
     for (const f of device?.features ?? []) {
+      if (meters.has(f.external_id)) {
+        // The value read (never the one sent), through the guard.
+        const read = this.indexesRead.get(f.external_id);
+        if (read) {
+          this.recordIndex(f.external_id, read);
+        }
+        continue;
+      }
       const value = this.lastValues.get(f.external_id);
       if (value) {
         this.publisher.push(f.external_id, value);

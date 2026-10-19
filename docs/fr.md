@@ -140,11 +140,22 @@ l'atteint jamais.
   mouvement, serrure, porte…) qu'aucun événement n'a annoncé, ou quand le
   socket est resté muet 30 minutes, il est rouvert aussitôt ; les badges ne
   passent à l'orange que si cette réouverture échoue.
-- **Énergie** : l'index d'énergie ne fait que monter. Une valeur plus basse est
-  retenue ; elle n'est acceptée que si une mesure suivante dépasse cette
-  valeur basse (compteur remis à zéro qui recompte). La même valeur basse
-  relue reste retenue : un index lu à 0 puis revenu à la normale ne crée
-  aucune fausse consommation. Un driver qui donne des Wh est converti en kWh.
+- **Énergie** : Gladys compte chaque hausse de l'index d'énergie en entier
+  dans l'onglet Énergie. L'intégration ne publie donc jamais 0, et retient
+  toute valeur anormale : une baisse, ou un saut de plus de 25 kW en moyenne
+  depuis la dernière valeur acceptée (plus 0,5 kWh de marge). Pendant une
+  retenue, la dernière valeur acceptée est renvoyée, le badge de l'appareil
+  passe à l'orange avec le saut ou la baisse et les kWh en jeu, et le journal
+  le signale. Ni la répétition, ni le temps, ni une nouvelle hausse, ni un
+  enregistrement de la configuration, ni une reconnexion ne l'acceptent :
+  seul le bouton **Accepter l'index retenu** de la configuration le fait, et
+  il prend exactement la valeur affichée (plus ce que l'appareil a pu
+  consommer depuis) en répondant avec les kWh comptés. Un saut accepté est
+  compté d'un coup comme consommation ; une baisse acceptée (compteur remis à
+  zéro par `resetEnergy`) ne facture rien. Une valeur revenue à la normale
+  lève la retenue. La retenue est gardée dans `/data` et survit à un
+  redémarrage ; créer l'appareil (à nouveau) repart de zéro. Un driver qui
+  donne des Wh est converti en kWh.
 - **Le socket d'événements transporte les événements de tous les appareils du
   hub**, pas seulement de ceux que vous avez autorisés : l'intégration garde
   les autorisés et ignore les autres. Il ne demande pas de jeton.

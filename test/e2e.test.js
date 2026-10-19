@@ -11,6 +11,7 @@ import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { HubitatApp } from '../src/app.js';
 import { ACTIONS } from '../src/constants.js';
 import { registerHandlers } from '../src/handlers.js';
+import { createMemoryStore } from '../src/store.js';
 import { APP_ID, TOKEN } from './helpers/fakeHub.js';
 import { hubServer, waitFor } from './helpers/hubServer.js';
 
@@ -19,7 +20,11 @@ test('a Hubitat hub, end to end: devices, live states, commands, presses, test',
   const gladys = createFakeGladys({
     config: { hub_address: sim.url, app_id: APP_ID, access_token: TOKEN },
   });
-  const app = new HubitatApp({ gladys, logger: createLogger({ level: 'silent' }) });
+  const app = new HubitatApp({
+    gladys,
+    logger: createLogger({ level: 'silent' }),
+    store: createMemoryStore(),
+  });
   registerHandlers(gladys, app);
   t.after(async () => {
     app.stop();

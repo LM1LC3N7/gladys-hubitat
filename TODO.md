@@ -50,8 +50,9 @@ up to date at the end of every milestone.
 - The answer to a wrong token (401 or 200 with `{ error: true }`) and to a
   wrong app number (404 or an HTML page): both are handled, the messages
   depend on it.
-- `energy` reset by the user (`resetEnergy`): the Gladys core sees a meter
-  going down.
+- `energy` reset by the user (`resetEnergy`): held as a drop until the user
+  clicks "Accept the held index"; check on a real hub that the driver reports
+  the reset as one low value (and the 25 kW bound for big loads on a meter).
 - Whether `numberOfButtons` events come when a driver changes it.
 
 ## Decisions
@@ -173,10 +174,34 @@ up to date at the end of every milestone.
   state" trigger of Gladys; dedicated `scene_triggers` are left for later.
 - **Energy**: `energy` (kWh) is a cumulative meter: `switch/energy` on a plug,
   `energy-sensor/index` on a meter alone, never a daily value. A unit `Wh`
-  is converted to kWh. A lower reading is held; the drop is taken only when a
-  later reading is strictly above the low value held (a reset that counts
-  again); the same low value read again stays held (review M3, approval R4,
-  test S9b [312.4, 0, 0, 312.5]).
+  is converted to kWh.
+- **Energy index guard (2026-10-19, fix after a review)**: the old filter
+  (src/app.js `meterOk`) had no check of a jump and took a drop at the next
+  reading above it, so fictive kWh could reach the Energy tab. Replaced by
+  the `IndexGuard` of gladys-p1-monitor (src/guard.js, approved: `margin`,
+  `follows`, `acceptHeld`, `withinAccepted`), copied as is without
+  `indexOfTariffs`; the only change is the highest plausible power as a
+  parameter, 25 kW per Hubitat device (`INDEX_MAX_KW`, slack 0.5 kWh). One
+  guard per energy feature of a created device; its reference is the
+  `last_value` / `last_value_changed` of `gladys.devices`, its state is kept
+  in `/data/hubitat-state.json` (bounded: 2000 entries, 1 MB, keys of 300
+  characters; checked when read; created features only; written at once when
+  a hold starts, changes or ends, a reference that only rose at most once a
+  minute), a value held read back being dated at its loading. While a value
+  is held the last accepted one is pushed again; the hold is on the badge
+  (orange, before "unconfirmed") and logged once per hold. The manifest
+  action `accept_held_index` accepts every hold shown, bounded by the guard,
+  takes them at once from the values read and answers with the kWh counted
+  (five listed by name at most). Neither `onConfigUpdated` nor `connected`
+  accepts anything; `onDeviceCreated` resets the guard of the device,
+  `onDeviceUpdated` (now its own handler) keeps it. The tests of
+  gladys-p1-monitor/test/model.test.js are in test/guard.test.js (the
+  "old reference" case moved from 10 to 30 days so that the margin of 25 kW
+  still exceeds the rise). Behaviour change: a meter reset by `resetEnergy`
+  is no longer taken by itself, the user accepts the drop (nothing billed).
+- **Manifest version test**: `test/manifest.test.js` pinned `0.1.0`, which the
+  release workflow had bumped to 0.1.1 (the test failed on `main`); it now
+  checks the shape of the version only.
 - **UV index**: `uv-sensor/integer`, rounded (review I5).
 - **Rates**: states through `publishChangedStates` (30-min heartbeat) within
   250 states a minute, measurements spaced by `sensor_interval` (10 s).
