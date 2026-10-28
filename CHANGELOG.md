@@ -12,9 +12,13 @@ the notes of the version's GitHub Release.
 
 ### Fixed
 
-- An accepted drop is now the floor: a reading lower still is held (never
-  counted without a new click), and the real value that follows is taken
-  instead of being held as a jump.
+- The counter guard keeps the value you accepted as a floor: after an
+  accepted drop, a reading lower still is held (never counted without
+  a new click) and the real value that follows is taken instead of being
+  held as a jump; a reading back under an accepted jump is now held too and
+  needs a new click.
+- The second click of "Accept the held index" never takes a value lower
+  than the one the first click listed: it is a first click again.
 
 ## [0.1.3] - 2026-10-23
 
