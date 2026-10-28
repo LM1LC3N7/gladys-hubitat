@@ -10,6 +10,12 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- An accepted drop is now the floor: a reading lower still is held (never
+  counted without a new click), and the real value that follows is taken
+  instead of being held as a jump.
+
 ## [0.1.3] - 2026-10-23
 
 ## [0.1.2] - 2026-10-19
