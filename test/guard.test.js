@@ -298,6 +298,7 @@ test('index guard: an accepted drop is the floor, a lower value later is held', 
   assert.ok(guard.acceptHeld());
   assert.equal(guard.accept(5, 2 * MINUTE), false, 'never 5 kWh without a click');
   assert.equal(guard.held.to, 5);
+  assert.equal(guard.held.from, 1000);
   assert.equal(guard.last.value, 1000);
   // The value accepted comes back: it follows, from the floor accepted.
   assert.equal(guard.accept(12.1, 3 * MINUTE), true);

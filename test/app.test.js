@@ -898,6 +898,29 @@ test('an index read at 0 when the device is created is never sent', async (t) =>
   assert.equal(gladys.fake.lastState(energy), 312.6);
 });
 
+test('a second click never takes a drop lower than the one listed', async (t) => {
+  const { gladys, box, tick } = await setup(t);
+  const plug = await created(gladys, 'Prise lave-linge (Buanderie)');
+  const energy = `${plug.external_id}:energy`;
+  await tick(TIMINGS.flushInterval);
+  box.emit('104', 'energy', 12);
+  await tick(TIMINGS.dropShownAfter + 1000);
+  assert.equal(gladys.fake.lastState(energy), 312.4, 'a drop held');
+  const action = async () => (await gladys.fake.action(ACTIONS.ACCEPT_HELD, {})).data.message;
+  let message = await action();
+  assert.match(message.en, /^Nothing accepted yet\./);
+  box.emit('104', 'energy', 5);
+  await tick(10_000);
+  message = await action();
+  assert.match(message.en, /^Nothing accepted yet\./, 'a first click again');
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 312.4, 'never 5 kWh without a click');
+  message = await action();
+  assert.match(message.en, /^Accepted/);
+  await tick(10_000);
+  assert.equal(gladys.fake.lastState(energy), 5, 'the value listed, accepted');
+});
+
 test('M1: the first click lists the holds; only a second click on the same holds within 2 min takes them', async (t) => {
   const { gladys, app, box, tick } = await setup(t, CONFIG, (hub) =>
     hub.devices.push(meterDevice()),

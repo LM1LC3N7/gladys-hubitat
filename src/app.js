@@ -873,8 +873,8 @@ export class HubitatApp {
 
   /**
    * Whether a hold, at its second click, is still what the first one
-   * listed (`{ to, at }`): a jump between `to` and `to` + the margin of its
-   * guard since then, a drop at most `to` + that margin.
+   * listed (`{ to, at }`): a jump or a drop between `to` and `to` + the
+   * margin of its guard since then.
    */
   withinListed(hold, listed, now) {
     const guard = this.indexGuards.get(hold.featureId);
@@ -882,7 +882,8 @@ export class HubitatApp {
       return false;
     }
     const top = listed.to + (guard.maxKw * Math.max(0, now - listed.at)) / HOUR + INDEX_SLACK_KWH;
-    return hold.direction === 'up' ? hold.to >= listed.to && hold.to <= top : hold.to <= top;
+    // Both ways a floor: a value lower than the one listed is a first click again.
+    return hold.to >= listed.to && hold.to <= top;
   }
 
   /** The hub device id of an energy feature. */
