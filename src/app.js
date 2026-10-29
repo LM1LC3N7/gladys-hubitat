@@ -812,8 +812,8 @@ export class HubitatApp {
    * (featureId:up:from:threshold for a jump, featureId:down:from for a drop,
    * whose low value moves with each reading of a reset meter) and each value
    * held now stays within what was listed: for a jump, from the `to` listed
-   * up to `to` + the margin of the guard since the listing; for a drop, at
-   * most `to` + that margin. Otherwise it is a first click again. Each one is
+   * up to `to` + the margin of the guard since the listing; for a drop, the
+   * same (never lower than the `to` listed). Otherwise it is a first click again. Each one is
    * then taken as shown (plus what the device may draw until its next
    * value, src/guard.js), never anything else.
    */
